@@ -15,7 +15,7 @@
 | G3 | 用 **攻擊鏈距離（ACD）** 把「現在打不到」量化，驅動嚴重度與未來防護建議 |
 | G4 | 為每個 LATENT 問題產出 **Tripwires（絆線）**：semgrep 規則 + CI 檢查，未來任何人寫出攻擊鏈就立刻擋下 |
 | G5 | 全程可重現、可離線複查：witness 原始碼、exploit payload、oracle 判定全部落盤 |
-| G6 | 成本可預測：分層模型路由 + 三層預算上限，單次掃描成本可事先估計 |
+| G6 | 成本可控：三層**硬性預算上限**（per-finding / per-run / per-stage），觸頂即降級停止——煞車而非預估，防止任何掃描失控燒額度 |
 
 ### 1.2 非目標（v1）
 
@@ -35,7 +35,7 @@
 | 語言 | v1 第一包：**Python web**（FastAPI / Flask / Django）；其他語言走 sink pack 擴充介面 |
 | 執行環境 | **Docker 強制**：無網路執行、build/run 分離 |
 | 使用場景 | 本機掃自己的專案；CI 整合設計上預留、後續里程碑實作 |
-| 模型供應商 | **BYOK**（使用者自帶 API key）：Anthropic 一級公民 + OpenAI-compatible 通用轉接；slash 指令互動設定；keychain 儲存 |
+| 模型供應商 | **BYOK**（使用者自帶 API key，**無內建供應商與預設模型**）：`anthropic` 與 `openai-compat` 兩種轉接器；slash 指令互動設定；keychain 儲存 |
 
 ---
 
@@ -126,9 +126,9 @@ Orchestrator（確定性狀態機：階段推進、預算、斷點續掃、並�
 
 ### 3.1 LLM 層設計
 
-**模型路由**（成本導向；下表為 Anthropic 供應商的內建預設，其他供應商由使用者以 `/model` 指定，見 §3.2）：
+**模型路由**：**沒有任何內建預設**。工具不預先綁定供應商，每個角色的模型由使用者以 `<provider>/<model-id>` 自行指定，解析序：repo `hz.toml` > 使用者層級設定（互動模式 `/model set` 寫入處）> 無；任一角色未定義即拒絕執行並提示設定方式。設計原則是**成本分層**：機械性工作用便宜模型、攻擊鏈證明用最強模型。下表為「使用者採用 Anthropic 時」的推薦配置**範例**（非預設，僅供參考）：
 
-| 角色 | 預設模型 | 理由 |
+| 角色 | 建議模型（範例） | 理由 |
 |------|----------|------|
 | recon | `claude-haiku-4-5` | 大量機械式結構摘要，最便宜 |
 | reviewer | `claude-sonnet-5`（effort: high） | 讀碼找洞的主力，性價比 |
@@ -185,14 +185,16 @@ LLMAdapter.chat(role, messages, tools, output_schema?, thinking?, stream?) -> Re
 
 **進入方式**：無參數執行 `hz`（或 `hz console`）進入互動模式；slash 指令僅存在於此模式。**不提供一次性設定子命令**（如 `hz login …`）——設定一律在互動模式完成；腳本／CI 場景以環境變數 + `hz.toml` 替代。
 
+**首次執行**：沒有內建供應商、金鑰與模型路由。任何一項缺漏時不會以預設值繼續，而是提示依序完成 `/provider add` → `/key set` → `/model set`（非互動場景對應環境變數 + `hz.toml`）。
+
 | 指令 | 作用 |
 |------|------|
 | `/provider list` | 列出供應商（名稱、類型、base_url、金鑰**是否已設**——只顯示有無，永不顯示內容） |
-| `/provider add <name>` | 新增供應商；`anthropic` 為內建名稱，其他（openai-compat）互動詢問 base_url |
+| `/provider add <name>` | 新增供應商（**無內建供應商**）：選 `type`（`anthropic` 或 `openai-compat`），openai-compat 再互動詢問 base_url |
 | `/provider remove <name>` | 移除供應商（連同其 keychain 金鑰） |
 | `/key set <provider>` | 隱藏輸入（no-echo）token，存入 OS keychain |
 | `/key clear <provider>` | 刪除已存 token |
-| `/model list` / `/model set <role> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由；reset 回內建預設（僅 anthropic 有預設） |
+| `/model list` / `/model set <role> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由（寫入使用者層級設定）；reset 清空覆寫、回到 repo `hz.toml` 的定義 |
 | `/status` | 供應商、金鑰狀態、目前路由、Docker 可用性 |
 | `/doctor` | 體檢：Docker、pre-baked 映像檔、供應商連通測試（host 端一次極小呼叫） |
 
@@ -321,11 +323,11 @@ plan ─▶ 選樣板 ─▶ 產生 {witness 原始碼, exploit 腳本, success 
 ### 5.4 RunRequest 組態（頂層 config 示意，`hz.toml`）
 
 ```toml
-[providers.my-openrouter]        # 內建 anthropic；其他 openai-compat 由使用者命名
+[providers.my-openrouter]        # 供應商全由使用者新增；type = "anthropic" | "openai-compat"
 type = "openai-compat"
 base_url = "https://openrouter.ai/api/v1"
 
-[models]                         # 一律 provider/model-id 形式
+[models]                         # 一律 provider/model-id 形式；無預設值，各角色必須由使用者定義
 recon    = "anthropic/claude-haiku-4-5"
 reviewer = "anthropic/claude-sonnet-5"
 triager  = "anthropic/claude-sonnet-5"
@@ -436,9 +438,9 @@ hz prove F-0007 --watch    # 觀察單一 finding 的 prover 迴圈過程
 | per-run | 總 tokens（例 5M）、總沙箱分鐘數、並行 finding 數 | 全域上限 |
 | per-stage | reviewer/prover 各自 token 上限 | 可單獨關閉 LLM 審查只跑 semgrep |
 
-成本控制手段：模型分層路由、system prompt + inventory 的 prompt caching、semgrep 吸收大量低成本候選工作、triage 提早砍掉低價值候選（省 prover 的 Opus 預算）、離線評測走 Batch API 半價。
+成本控制手段：模型分層路由（便宜模型做機械性工作）、system prompt + inventory 的 prompt caching、semgrep 吸收大量低成本候選工作、triage 提早砍掉低價值候選（省 prover 角色的高階模型額度）、離線評測走 Batch API（供應商支援時半價）。
 
-執行前預估：`hz scan --dry-run` 依 inventory 規模輸出預估 tokens／沙箱分鐘數。
+**不做執行前成本預估**（BYOK 下無此需求）；預算是煞車，不是報價。
 
 ---
 
@@ -493,7 +495,7 @@ out/run-<ts>/
 | 沙箱逃逸 | Docker 強制、run 無網路、唯讀掛載、資源上限、fs-diff 審計 |
 | API 金鑰外洩 | keychain 儲存 + 設定檔退回（0600）、落盤前全面 redaction、沙箱內零金鑰、`/provider list` 只顯示有無 |
 | Prompt injection（惡意 repo） | repo=資料原則、注入掃描、無外連、operator channel、secrets 掃描 |
-| 成本失控 | 三層預算、模型分層、caching、triage 提早淘汰、預估模式 |
+| 成本失控 | 三層硬性預算上限、模型分層、caching、triage 提早淘汰 |
 | 誤報疲勞 | triage 保守、FALSE_POSITIVE 需附理由、FP 回饋調整規則（v2 學習迴路） |
 | 工具被誤用於他人系統 | 文件聲明 + 介面設計（僅本地沙箱、目標 repo 需本機存在） |
 

@@ -1,0 +1,21 @@
+{
+  "comment": "Aegis 收緊版 seccomp profile（pack 內容物；§7.1：預設 seccomp 之上另附收緊版）。以 deny-list 收緊：阻擋容器逃逸與核心攻擊面相關 syscall；defaultAction ALLOW 與 Docker 預設一致，逐項 ERRNO 阻擋下列危險系統呼叫。對應威脅項 T3（docs/threat-model.md）。",
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_X32", "SCMP_ARCH_ARM", "SCMP_ARCH_AARCH64"],
+  "syscalls": [
+    {
+      "names": [
+        "mount", "umount", "umount2", "unshare", "setns",
+        "kexec_load", "kexec_file_load", "open_by_handle_at",
+        "init_module", "finit_module", "delete_module",
+        "swapon", "swapoff", "reboot", "acct",
+        "perf_event_open", "bpf", "iopl", "ioperm",
+        "create_module", "lookup_dcookie", "nfsservctl", "sysfs",
+        "afs_syscall", "get_kernel_syms", "quotactl", "vhangup",
+        "pivot_root", "chroot"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1
+    }
+  ]
+}

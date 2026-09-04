@@ -1,0 +1,7 @@
+{
+  "oracle_id": "sqli.error/v1",
+  "family": "sqli",
+  "touch": "sink.touch.sql/v1",
+  "rule": {"artifact": "sql_trace.jsonl", "kind": "nonce_statement_errored"},
+  "rationale": "存在一筆 trace entry 的 sql 含 nonce 且 error != null。字串拼接 sink 下，良性輸入 alice-<nonce> 一樣會把 nonce 插進 SQL 字面值——「含 nonce」無法區分良性送達與真正跳脫；「nonce 所在語句觸發 driver 例外」只有引號真的改變了 SQL 語法才會成立（SPEC §17.3）。"
+}

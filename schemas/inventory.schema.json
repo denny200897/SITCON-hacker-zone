@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/inventory.schema.json",
+  "title": "Inventory",
+  "type": "object",
+  "required": ["snapshot_id", "files", "frameworks", "routes", "entrypoints", "dependencies"],
+  "additionalProperties": false,
+  "properties": {
+    "snapshot_id": {"type": "string", "pattern": "^SN-[0-9a-f]{12}$"},
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "bytes", "language"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string"},
+          "bytes": {"type": "integer", "minimum": 0},
+          "language": {"type": "string"},
+          "module": {"type": "string"}
+        }
+      }
+    },
+    "frameworks": {
+      "type": "array",
+      "items": {"type": "string", "enum": ["fastapi", "flask", "django", "unknown"]}
+    },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["method", "path", "handler_file", "handler_line", "handler_symbol"],
+        "additionalProperties": false,
+        "properties": {
+          "method": {"type": "string"},
+          "path": {"type": "string"},
+          "handler_file": {"type": "string"},
+          "handler_line": {"type": "integer", "minimum": 1},
+          "handler_symbol": {"type": "string"}
+        }
+      }
+    },
+    "entrypoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "file", "line", "symbol"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {"type": "string", "enum": ["http_handler", "cli", "env", "file_read", "other"]},
+          "file": {"type": "string"},
+          "line": {"type": "integer", "minimum": 1},
+          "symbol": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "version"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "version": {"type": "string"},
+          "source": {"type": "string", "enum": ["requirements.txt", "pyproject.toml", "poetry.lock", "uv.lock", "unknown"]}
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}}
+  }
+}

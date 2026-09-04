@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/journal_event.schema.json",
+  "title": "JournalEvent",
+  "description": "SQLite event journal 的事件列；event types 為閉集（§21.3），加新事件必須升 schema_version",
+  "type": "object",
+  "required": ["seq", "type", "ts", "schema_version"],
+  "additionalProperties": false,
+  "properties": {
+    "seq": {"type": "integer", "minimum": 1},
+    "type": {
+      "type": "string",
+      "enum": [
+        "run_started",
+        "snapshot_created",
+        "stage_completed",
+        "candidate_created",
+        "candidate_merged",
+        "finding_created",
+        "triage_updated",
+        "witness_spec_submitted",
+        "witness_spec_rejected",
+        "run_requested",
+        "run_completed",
+        "evidence_written",
+        "verification_updated",
+        "budget_updated",
+        "disposition_updated",
+        "report_written",
+        "cancelled"
+      ]
+    },
+    "ts": {"type": "string", "format": "date-time"},
+    "schema_version": {"type": "string"},
+    "finding_id": {"type": "string", "pattern": "^F-[0-9]{4}$"},
+    "payload": {"type": "object"}
+  }
+}

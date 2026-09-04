@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/evidence.schema.json",
+  "title": "Evidence",
+  "description": "content-addressed bundle（§5.3）；kind 三者分離執行；hash 鏈見 prev_evidence_hash",
+  "type": "object",
+  "required": ["id", "kind", "snapshot_id", "repo_tree_hash", "image", "pack", "runner_version", "prompt_version", "schemas_version", "run_request_hash", "run_result", "oracle", "created_by", "verified_by"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "pattern": "^EV-[0-9]{4}$"},
+    "kind": {"type": "string", "enum": ["negative", "positive", "exploit"]},
+    "finding_id": {"type": "string", "pattern": "^F-[0-9]{4}$"},
+    "run_id": {"type": "string", "pattern": "^R-[0-9]{4}$"},
+    "snapshot_id": {"type": "string", "pattern": "^SN-[0-9a-f]{12}$"},
+    "repo_tree_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "worktree_manifest": {
+      "type": "object",
+      "required": ["dirty", "untracked"],
+      "additionalProperties": false,
+      "properties": {
+        "dirty": {"type": "array", "items": {"type": "string"}},
+        "untracked": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "image": {"type": "string", "pattern": "^.*@sha256:[0-9a-f]{64}$"},
+    "deps_lock_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "pack": {
+      "type": "object",
+      "required": ["id", "version", "abi"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string"},
+        "version": {"type": "string"},
+        "abi": {"type": "integer"}
+      }
+    },
+    "runner_version": {"type": "string"},
+    "prompt_version": {"type": "string"},
+    "schemas_version": {"type": "string"},
+    "run_request_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "run_result": {"$ref": "run_result.schema.json"},
+    "oracle": {
+      "type": "object",
+      "required": ["oracle_id", "nonce", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "oracle_id": {"type": "string"},
+        "nonce": {"type": "string"},
+        "nonce_observed": {"type": "boolean"},
+        "result": {"type": "boolean"},
+        "touch": {
+          "type": "object",
+          "required": ["oracle_id", "result"],
+          "additionalProperties": false,
+          "properties": {
+            "oracle_id": {"type": "string"},
+            "result": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "prev_evidence_hash": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+    "created_by": {"type": "string", "enum": ["prover", "orchestrator", "policy"]},
+    "verified_by": {"type": "string", "const": "checker"}
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "oracle_id": "sink.touch.sql/v1",
+  "family": "sqli",
+  "touch": null,
+  "rule": {"artifact": "sql_trace.jsonl", "kind": "nonce_in_field", "field": "sql"},
+  "rationale": "paired touch rule：nonce 出現在任一 SQL 語句欄位即證明輸入確實流經 sink（正對照，SPEC §9.2/§17.3）。"
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/triage.schema.json",
+  "title": "Triage",
+  "description": "triager 對單一 candidate 的判定（§4 Stage 2 / §20.1）",
+  "type": "object",
+  "required": ["candidate_id", "verdict", "rationale"],
+  "additionalProperties": false,
+  "properties": {
+    "candidate_id": {"type": "string", "pattern": "^C-[0-9]{4}$"},
+    "verdict": {"type": "string", "enum": ["FALSE_POSITIVE", "PROCEED"]},
+    "reachability": {"type": "string", "enum": ["UNKNOWN", "D0", "D1", "D2", "D3"]},
+    "mode": {"type": "string", "enum": ["direct", "witness"]},
+    "missing_links": {
+      "type": "array",
+      "description": "攻擊鏈缺的環節；每環節需 file:line 證據（§20.1）",
+      "items": {
+        "type": "object",
+        "required": ["link", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "link": {"type": "string"},
+          "evidence": {"type": "string"}
+        }
+      }
+    },
+    "fp_reason": {"type": "string", "description": "verdict=FALSE_POSITIVE 必附理由"},
+    "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+    "rationale": {"type": "string"}
+  }
+}

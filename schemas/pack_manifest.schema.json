@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/pack_manifest.schema.json",
+  "title": "PackManifest",
+  "description": "pack ABI 正式版本契約（§6.4）；core 載入前逐項驗證，不匹配即拒載",
+  "type": "object",
+  "required": ["pack_id", "version", "schema_version", "capabilities", "detectors", "templates", "oracles", "images", "trust_level", "sink_types"],
+  "additionalProperties": false,
+  "properties": {
+    "pack_id": {"type": "string"},
+    "version": {"type": "string"},
+    "schema_version": {"type": "integer", "description": "ABI 版本；與 core 相容性協商"},
+    "capabilities": {
+      "type": "array",
+      "description": "此 pack 需要的 runner 能力；core 不支援即拒載",
+      "items": {"type": "string", "enum": ["internal_network", "headless_browser", "deps_helper", "ast_helper"]}
+    },
+    "detectors": {
+      "type": "array",
+      "description": "宣告式優先：semgrep YAML／regex spec 路徑（不讓未受信任可執行鉤子在 host 跑）",
+      "items": {
+        "type": "object",
+        "required": ["id", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "templates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["template_id", "family", "run_mode", "path", "sha256", "allowed_files"],
+        "additionalProperties": false,
+        "properties": {
+          "template_id": {"type": "string"},
+          "family": {"type": "string"},
+          "run_mode": {"type": "string", "enum": ["witness", "direct", "both"]},
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "allowed_files": {"type": "array", "items": {"type": "string"}, "description": "generated_files 副檔名允許清單（§17.9-3）"},
+          "service_cmd": {"type": "string"},
+          "service_port": {"type": "integer"},
+          "wait_for": {"type": "string"},
+          "health_path": {"type": "string"},
+          "image": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9._/-]+@sha256:[0-9a-f]{64}$",
+            "description": "每 template 對應映像檔的 digest（可選——無則走 §17.10 解析序：本地 images.json → ENV_ERROR）；可變 tag 拒絕（§6.4）"
+          }
+        }
+      }
+    },
+    "oracles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["oracle_id", "family", "rule", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "oracle_id": {"type": "string"},
+          "family": {"type": "string"},
+          "touch": {"type": ["string", "null"], "description": "paired touch rule 的 oracle_id；每個漏洞家族必附（§17.3），touch 缺漏為拒載條件"},
+          "rule": {
+            "type": "object",
+            "required": ["artifact", "kind"],
+            "additionalProperties": false,
+            "properties": {
+              "artifact": {"type": "string"},
+              "kind": {"type": "string", "enum": ["nonce_in_field", "nonce_statement_errored", "rowcount_at_least", "listener_request_with_nonce", "dom_event_with_nonce", "canary_file_match"]},
+              "field": {"type": "string"},
+              "threshold": {"type": "integer"}
+            }
+          },
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "payloads": {
+      "type": "array",
+      "description": "canary 化良性探測載荷（含 negative/positive 共用的良性模板）",
+      "items": {
+        "type": "object",
+        "required": ["id", "family", "kind", "content", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "family": {"type": "string"},
+          "kind": {"type": "string", "enum": ["benign", "canary"]},
+          "content": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "images": {
+      "type": "object",
+      "description": "輔助映像 digest（deps helper、ast helper、alpine 收回 helper、listener sidecar）",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-zA-Z0-9._/-]+@sha256:[0-9a-f]{64}$"
+      }
+    },
+    "sink_types": {
+      "type": "array",
+      "description": "sink type → impact 映射；core 只讀表（§20.2）",
+      "items": {
+        "type": "object",
+        "required": ["type", "family", "impact"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {"type": "string"},
+          "family": {"type": "string"},
+          "impact": {"type": "string", "enum": ["high", "medium", "low"]}
+        }
+      }
+    },
+    "trust_level": {"type": "string", "enum": ["bundled", "community"]},
+    "tests": {
+      "type": "array",
+      "description": "pack 自帶 fixture 測試（含 replay）；CI 強制執行（§6.4）",
+      "items": {
+        "type": "object",
+        "required": ["name", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string"},
+          "kind": {"type": "string", "enum": ["replay", "detector", "oracle"]}
+        }
+      }
+    }
+  }
+}

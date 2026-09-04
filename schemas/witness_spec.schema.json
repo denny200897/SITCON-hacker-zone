@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/witness_spec.schema.json",
+  "title": "WitnessSpec",
+  "description": "prover 唯一可輸出的沙箱請求形式；RunRequest 由 policy compiler 組裝（不變式 1）",
+  "type": "object",
+  "required": ["template_id", "target_symbol", "oracle_id", "payload", "generated_files", "run_mode"],
+  "additionalProperties": false,
+  "properties": {
+    "template_id": {"type": "string"},
+    "target_symbol": {"type": "string"},
+    "oracle_id": {"type": "string"},
+    "payload_variant": {"type": "string"},
+    "payload": {
+      "type": "string",
+      "description": "必填；必含至少一個 {{NONCE}} 或 {{NONCE_HEX}} placeholder（§17.2/§17.9-4）",
+      "maxLength": 2048
+    },
+    "generated_files": {
+      "type": "object",
+      "description": "鍵必為 witness/<name> 形式（direct 模式僅 exploit 腳本）；≤8 檔、總計 ≤256KiB（§17.9-3）",
+      "propertyNames": {"type": "string", "pattern": "^witness/[A-Za-z0-9._/-]+$"},
+      "additionalProperties": {"type": "string"}
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "D2/D3 finding 必附 ≥1 條（§17.9-6）"
+    },
+    "run_mode": {"type": "string", "enum": ["witness", "direct"]},
+    "learning_notes": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "§18.2 三行 preamble：上輪學到什麼／這輪改什麼／預期觀察到什麼",
+      "items": {"type": "string"}
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/run_result.schema.json",
+  "title": "RunResult",
+  "type": "object",
+  "required": ["exit", "stdout", "stderr", "artifacts", "fs_diff"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": {"type": "string", "pattern": "^R-[0-9]{4}$"},
+    "exit": {"type": "integer", "description": "exit code 契約閉集：0|2|3|124|125|126|127（§17.1）", "enum": [0, 2, 3, 124, 125, 126, 127]},
+    "stdout": {"type": "string", "description": "完整內容進 evidence；stdout 永不作為成功證據（§5.3）"},
+    "stderr": {"type": "string"},
+    "stdout_tail": {"type": "string"},
+    "stderr_tail": {"type": "string"},
+    "artifacts": {"type": "array", "items": {"type": "string"}},
+    "fs_diff": {
+      "type": "object",
+      "required": ["added", "modified"],
+      "additionalProperties": false,
+      "properties": {
+        "added": {"type": "array", "items": {"type": "string"}},
+        "modified": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "service_log_tail": {"type": "string"},
+    "duration_ms": {"type": "integer", "minimum": 0}
+  }
+}

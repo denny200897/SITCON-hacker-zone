@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/finding.schema.json",
+  "title": "Finding",
+  "type": "object",
+  "required": ["id", "sink", "sources", "reachability", "verification", "disposition", "snapshot_id"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "pattern": "^F-[0-9]{4}$"},
+    "sink": {
+      "type": "object",
+      "required": ["file", "line", "symbol", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "file": {"type": "string"},
+        "line": {"type": "integer", "minimum": 1},
+        "symbol": {"type": "string"},
+        "type": {"type": "string"}
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["origin"],
+        "additionalProperties": false,
+        "properties": {
+          "origin": {"type": "string", "enum": ["semgrep", "llm"]},
+          "rule": {"type": "string"}
+        }
+      }
+    },
+    "reachability": {"type": "string", "enum": ["UNKNOWN", "D0", "D1", "D2", "D3"]},
+    "verification": {"type": "string", "enum": ["NOT_RUN", "PROVEN", "HYPOTHESIS_REJECTED", "NOT_PROVEN", "ENV_ERROR"]},
+    "disposition": {"type": "string", "enum": ["OPEN", "FALSE_POSITIVE", "ACCEPTED_RISK", "FIXED"]},
+    "mode": {"type": "string", "enum": ["direct", "witness"]},
+    "chain": {"type": "array", "items": {"type": "string"}},
+    "missing_links": {"type": "array", "items": {"type": "string"}},
+    "evidence_id": {"type": "string", "pattern": "^EV-[0-9]{4}$"},
+    "snapshot_id": {"type": "string", "pattern": "^SN-[0-9a-f]{12}$"},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "fix": {
+      "type": "object",
+      "required": ["summary"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {"type": "string"},
+        "diff_suggestion": {"type": "string"}
+      }
+    },
+    "guardrails": {"type": "array", "items": {"type": "string", "pattern": "^GR-[0-9]{4}$"}},
+    "severity": {"type": "string", "enum": ["critical", "high", "medium", "low", "none"]},
+    "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "rationale": {"type": "string"},
+    "reject_scope": {
+      "type": "object",
+      "description": "HYPOTHESIS_REJECTED 專用：scope 限被測 sink/context/payload family",
+      "additionalProperties": false,
+      "properties": {
+        "sink": {"type": "string"},
+        "context": {"type": "string"},
+        "payload_family": {"type": "string"},
+        "snapshot_id": {"type": "string"}
+      }
+    },
+    "not_proven_reason": {
+      "type": "string",
+      "description": "NOT_PROVEN 專用：harness_budget | sandbox_budget | oscillation | user_cancelled",
+      "enum": ["harness_budget", "sandbox_budget", "oscillation", "user_cancelled"]
+    }
+  }
+}

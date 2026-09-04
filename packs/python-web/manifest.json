@@ -1,0 +1,120 @@
+{
+  "pack_id": "python-web",
+  "version": "1.0.0",
+  "schema_version": 1,
+  "capabilities": [
+    "internal_network",
+    "deps_helper",
+    "ast_helper"
+  ],
+  "detectors": [
+    {
+      "id": "py/sql/string-concat",
+      "path": "detectors/py-sql-concat.yml",
+      "sha256": "5e72598458ad786fbe3fdcbdfc5e8ab2a1cb17184bc9c07d8675b99935cbfead"
+    }
+  ],
+  "templates": [
+    {
+      "template_id": "py/http-endpoint/v3",
+      "family": "sqli",
+      "run_mode": "witness",
+      "path": "templates/py-http-endpoint-witness-v3.py",
+      "sha256": "f3249b46d865c6f124eb2fc584f6db95494fa72c2a1944438ec47f9b6a4575d0",
+      "allowed_files": [
+        ".py"
+      ],
+      "service_cmd": "python /aegis/witness/app.py",
+      "service_port": 8000,
+      "wait_for": "GET /healthz",
+      "health_path": "/healthz",
+      "image": "aegis-python-web@sha256:612e103c134210bfcf49b7ef9393418f3f25da16937f44ba77c3dba0c0b6e77c"
+    },
+    {
+      "template_id": "py/http-endpoint-direct/v3",
+      "family": "sqli",
+      "run_mode": "direct",
+      "path": "templates/py-http-endpoint-witness-v3.py",
+      "sha256": "f3249b46d865c6f124eb2fc584f6db95494fa72c2a1944438ec47f9b6a4575d0",
+      "allowed_files": [
+        ".py"
+      ],
+      "service_cmd": "python /target/app.py",
+      "service_port": 8000,
+      "wait_for": "GET /healthz",
+      "health_path": "/healthz",
+      "image": "aegis-python-web@sha256:612e103c134210bfcf49b7ef9393418f3f25da16937f44ba77c3dba0c0b6e77c"
+    }
+  ],
+  "oracles": [
+    {
+      "oracle_id": "sqli.error/v1",
+      "family": "sqli",
+      "touch": "sink.touch.sql/v1",
+      "rule": {
+        "artifact": "sql_trace.jsonl",
+        "kind": "nonce_statement_errored"
+      },
+      "sha256": "d0654d845954bb399342d44e2ffb537f8adfa869b75b2905ed4bb0d9a2caa7a4"
+    },
+    {
+      "oracle_id": "sink.touch.sql/v1",
+      "family": "sqli",
+      "touch": null,
+      "rule": {
+        "artifact": "sql_trace.jsonl",
+        "kind": "nonce_in_field",
+        "field": "sql"
+      },
+      "sha256": "cdbee9f3b2706eec895327b13221906c1d7b893ce2634087a19b5108bc82a8db"
+    }
+  ],
+  "payloads": [
+    {
+      "id": "sqli.benign/v1",
+      "family": "sqli",
+      "kind": "benign",
+      "content": "alice-{{NONCE}}",
+      "sha256": "29401d05d2edd7bbba73fa01112ad8613b80f3ac144df5ad73201627fe93d885"
+    },
+    {
+      "id": "sqli.error-quote/v1",
+      "family": "sqli",
+      "kind": "canary",
+      "content": "{{NONCE}}'",
+      "sha256": "ab05522206eb3d17ee97d7bfc5b05770249e8955ea02552d5e29b254dffd395c"
+    }
+  ],
+  "images": {
+    "helper/alpine": "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+  },
+  "sink_types": [
+    {
+      "type": "sql.concat",
+      "family": "sqli",
+      "impact": "high"
+    },
+    {
+      "type": "cmd.shell",
+      "family": "cmdi",
+      "impact": "high"
+    },
+    {
+      "type": "deserialization.yaml",
+      "family": "deserialization",
+      "impact": "high"
+    },
+    {
+      "type": "ssrf.url",
+      "family": "ssrf",
+      "impact": "high"
+    }
+  ],
+  "trust_level": "bundled",
+  "tests": [
+    {
+      "name": "vuln-sqli-001-replay",
+      "kind": "replay"
+    }
+  ]
+}

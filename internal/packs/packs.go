@@ -2,7 +2,7 @@
 //
 // pack 是有版本契約的模組：core 載入前逐項驗證 manifest——schema 驗證、
 // ABI 版本協商、runner 能力、內容 sha256 對照、oracle paired touch rule
-//（§17.3）、trust level、映像 digest 形式——任一不匹配即拒載，
+// （§17.3）、trust level、映像 digest 形式——任一不匹配即拒載，
 // 不做部分載入（§6.4「不匹配即拒載」）。
 //
 // 載入後的 Pack 是唯讀表：core 只讀 manifest 資料（模板、oracle 規則、
@@ -392,13 +392,15 @@ func verifyImages(m *Manifest) error {
 	}
 	for name, image := range m.Images {
 		if err := checkDigest(image); err != nil {
-			return fmt.Errorf("packs: images[%q]: %w", name, err)
+			return fmt.Errorf("packs: images[%q]: %w", name, errors.Join(ErrManifest, err))
 		}
 	}
 	return nil
 }
 
-// checkDigest 驗證映像參照為 digest 形式（名稱段不含 tag 的 ":"）。
+// checkDigest 驗證映像參照為 digest 形式。registry host 可含 port（例如
+// localhost:5000/repo@sha256:...）；只有 repository 名稱最後一段的 ":"
+// 才代表可變 tag，必須拒絕。
 func checkDigest(image string) error {
 	idx := strings.LastIndex(image, "@sha256:")
 	if idx < 0 {
@@ -408,7 +410,7 @@ func checkDigest(image string) error {
 	if name == "" {
 		return fmt.Errorf("packs: %w：%q 缺映像名稱", ErrImage, image)
 	}
-	if strings.Contains(name, ":") {
+	if colon := strings.LastIndex(name, ":"); colon > strings.LastIndex(name, "/") {
 		return fmt.Errorf("packs: %w：%q 含可變 tag（名稱段不得有 \":\"）", ErrImage, image)
 	}
 	if _, err := hex.DecodeString(digest); err != nil || len(digest) != 64 {

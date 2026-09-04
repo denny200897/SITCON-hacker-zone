@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -171,7 +172,9 @@ func checkDocker(ctx context.Context, o Options) Check {
 //
 // ASK（§23：不自行選擇）：版本輸出的擷取形式有兩個選項——
 // (a) `--format '{{.Client.Version}}（server {{.Server.Version}}）'`（採用：一行、
-//     可直接放入 tabwriter，且 §16 規定 docker 輸出用 --format）；
+//
+//	可直接放入 tabwriter，且 §16 規定 docker 輸出用 --format）；
+//
 // (b) 純 `docker version` 後由 harness 抓 "Version:" 行（輸出多行、解析易碎）。
 // daemon 掛掉時 (a) 的 Go template 會失敗、exit 非 0，錯誤訊息仍可取得。
 func dockerVersion(ctx context.Context, bin string) (string, error) {
@@ -380,7 +383,7 @@ func isDigestRef(ref string) bool {
 }
 
 // pickRepoDigest 自 docker inspect 的 RepoDigests 取第一個合法 digest 定址
-//（"name@sha256:<64hex>" 形式）；無合法項回空字串。
+// （"name@sha256:<64hex>" 形式）；無合法項回空字串。
 func pickRepoDigest(digests []string) string {
 	for _, d := range digests {
 		if isDigestRef(d) {
@@ -433,7 +436,7 @@ func readImagesJSON(path string) map[string]string {
 // ---- docker 輔助（§16：os/exec、capture stdout/stderr、不用 Docker SDK） ----
 
 // dockerImageExists 以 `docker image inspect <ref>` 探測本機映像
-//（exit 0 即存在；與 tests/e2e 的 imageExists 同一判準）。
+// （exit 0 即存在；與 tests/e2e 的 imageExists 同一判準）。
 func dockerImageExists(ctx context.Context, bin, ref string) bool {
 	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
@@ -447,7 +450,12 @@ func dockerImageExists(ctx context.Context, bin, ref string) bool {
 // pack 根目錄（cmd.Dir=packDir；COPY sandbox/、templates/ 需以 pack 根解析，
 // docs/adr/0002 決策三）。輸出整併 capture，失敗時取尾段供診斷。
 func dockerBuild(ctx context.Context, bin, dir, tag string) error {
-	cmd := exec.CommandContext(ctx, bin, "build", "-f", filepath.Join("image", "Dockerfile"), "-t", tag, ".")
+	cleanup, observerDir, err := prepareObserverBinary(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	cmd := exec.CommandContext(ctx, bin, "build", "--build-context", "observer-bin="+observerDir, "-f", filepath.Join("image", "Dockerfile"), "-t", tag, ".")
 	cmd.Dir = dir
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
@@ -455,6 +463,32 @@ func dockerBuild(ctx context.Context, bin, dir, tag string) error {
 		return fmt.Errorf("doctor: docker build %s 失敗：%s：%w", tag, truncTail(buf.String()), err)
 	}
 	return nil
+}
+
+// prepareObserverBinary injects the same static Go proxy into the pack build
+// context. It is temporary and removed immediately after docker build.
+func prepareObserverBinary(ctx context.Context) (func(), string, error) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		return func() {}, "", fmt.Errorf("doctor: 無法定位 observer proxy source")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
+	dir, err := os.MkdirTemp("", "aegis-observer-bin-")
+	if err != nil {
+		return func() {}, "", fmt.Errorf("doctor: 建立 observer build context：%w", err)
+	}
+	out := filepath.Join(dir, "observer-proxy")
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-buildvcs=false", "-o", out, "./cmd/aegis-observer-proxy")
+	cmd.Dir = root
+	// The binary is copied into a Linux pack image.  Force the target OS so
+	// running /doctor on macOS (or another host OS) never produces a host-format
+	// executable that fails in the observer sidecar with exec format error.
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(dir)
+		return func() {}, "", fmt.Errorf("doctor: observer proxy build 失敗：%s：%w", truncTail(string(output)), err)
+	}
+	return func() { _ = os.RemoveAll(dir) }, dir, nil
 }
 
 // dockerRepoDigests 以 `docker image inspect --format {{json .RepoDigests}} <ref>`
@@ -558,7 +592,7 @@ func checkProviders(ctx context.Context, o Options, secrets *[]string) []Check {
 }
 
 // newAdapter 依 §3.2 閉集建構 adapter；BaseURL 交由 adapter 注入
-//（anthropic 可空 → 官方端點；openai-compat 必填，§3.3 /provider add）。
+// （anthropic 可空 → 官方端點；openai-compat 必填，§3.3 /provider add）。
 func newAdapter(name string, p settings.Provider, key string) (llm.Adapter, error) {
 	switch credentials.ProviderType(p.Type) {
 	case credentials.ProviderTypeAnthropic:

@@ -53,7 +53,7 @@ func TestPackAdapterImagesJSONFallback(t *testing.T) {
 	pack, _ := testPack(t)
 	cacheDir := t.TempDir()
 	cachePath := filepath.Join(cacheDir, "images.json")
-	if err := RecordImage(cachePath, "aegis-python-web", "aegis-python-web@sha256:" + strings64); err != nil {
+	if err := RecordImage(cachePath, "aegis-python-web", "aegis-python-web@sha256:"+strings64); err != nil {
 		t.Fatal(err)
 	}
 	// 模擬 manifest 未記 digest：清空 template image 再經 adapter 解析。

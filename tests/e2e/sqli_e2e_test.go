@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -116,16 +117,16 @@ func setupE2E(t *testing.T) (*orchestrator.Prover, string) {
 	}
 
 	return &orchestrator.Prover{
-		Runner:      runner,
-		Journal:     j,
-		Store:       store,
-		Pack:        pack,
-		PackDir:     packDir,
-		SnapshotID:  snap.ID,
-		SnapshotDir: snap.Dir,
-		RunDir:      runDir,
-		CachePath:   filepath.Join(cacheDir, "images.json"),
-		Budget:      budget.Budget{MaxEnv: 1, MaxHarness: 1, MaxHypotheses: 1, MaxSandboxMinutes: 10},
+		Runner:         runner,
+		Journal:        j,
+		Store:          store,
+		Pack:           pack,
+		PackDir:        packDir,
+		SnapshotID:     snap.ID,
+		SnapshotDir:    snap.Dir,
+		RunDir:         runDir,
+		CachePath:      filepath.Join(cacheDir, "images.json"),
+		Budget:         budget.Budget{MaxEnv: 1, MaxHarness: 1, MaxHypotheses: 1, MaxSandboxMinutes: 10},
 		PrevSpecHashes: map[string]bool{},
 	}, findingID
 }
@@ -182,10 +183,10 @@ except Exception as exc:
     print("request failed:", exc)
 `
 	return map[string]any{
-		"template_id": "py/http-endpoint/v3",
-		"oracle_id":   "sqli.error/v1",
-		"run_mode":    "witness",
-		"payload":     "{{NONCE}}'",
+		"template_id":   "py/http-endpoint/v3",
+		"oracle_id":     "sqli.error/v1",
+		"run_mode":      "witness",
+		"payload":       "{{NONCE}}'",
 		"target_symbol": "app.UserRepo.find_by_name",
 		"assumptions": []any{
 			"UserRepo.find_by_name 以 f-string 將 name 串接進 SQL（error-based SQLi）",
@@ -348,13 +349,14 @@ func TestM0bControlledMissRejectsHypothesis(t *testing.T) {
 // e2eVerifyChainAndReplay：evidence 鏈驗證 + 離線 replay ×2 一致性（§22 M0b）。
 func e2eVerifyChainAndReplay(t *testing.T, pack *packs.Pack, runDir string, res *orchestrator.ProveResult) {
 	t.Helper()
+	_ = res // self-contained replay intentionally does not use in-memory result.
 	if err := evidence.VerifyChain(filepath.Join(runDir, "evidence")); err != nil {
 		t.Fatalf("evidence 鏈驗證失敗: %v", err)
 	}
-	if err := orchestrator.ReplayCheck(pack, runDir, res); err != nil {
+	if err := orchestrator.ReplayBundle(pack, runDir); err != nil {
 		t.Fatalf("replay 驗證失敗: %v", err)
 	}
-	if err := orchestrator.ReplayCheck(pack, runDir, res); err != nil {
+	if err := orchestrator.ReplayBundle(pack, runDir); err != nil {
 		t.Fatalf("replay 第二次不一致: %v", err)
 	}
 }
@@ -383,7 +385,17 @@ func packImageDigest() string {
 
 func buildPackImage(t *testing.T, repoRoot string) {
 	t.Helper()
-	cmd := exec.Command("docker", "build", "-f", "image/Dockerfile", "-t", packImageTag, ".")
+	proxyDir := t.TempDir()
+	proxy := filepath.Join(proxyDir, "observer-proxy")
+	build := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", proxy, "./cmd/aegis-observer-proxy")
+	build.Dir = repoRoot
+	// The observer binary runs inside the Linux Docker image, not on the host.
+	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+runtime.GOARCH)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Logf("observer proxy build 失敗（可 skip 場景）：%v\n%s", err, tailStr(string(out)))
+		return
+	}
+	cmd := exec.Command("docker", "build", "--build-context", "observer-bin="+proxyDir, "-f", "image/Dockerfile", "-t", packImageTag, ".")
 	cmd.Dir = filepath.Join(repoRoot, "packs", "python-web")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

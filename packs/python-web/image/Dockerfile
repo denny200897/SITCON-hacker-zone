@@ -4,18 +4,22 @@ FROM python:3.12-slim
 
 # nonroot user 65532（§7.1）；/aegis 目錄結構
 RUN groupadd -g 65532 aegis && useradd -m -u 65532 -g 65532 aegis \
-    && mkdir -p /aegis/pack /aegis/witness /aegis/out /aegis/wheels \
+    && mkdir -p /aegis/pack /aegis/witness /aegis/out /aegis/trusted /aegis/wheels \
     && chown -R 65532:65532 /aegis
 
 # pack 內容物（observer／entrypoint／模板／trace shim）
 COPY sandbox/ /aegis/pack/
 COPY templates/ /aegis/templates/
+# Build flow supplies this file through the named BuildKit context
+# `observer-bin`; the binary is never committed to the pack.
+COPY --from=observer-bin observer-proxy /aegis/observer-proxy
 
 # 常用框架預裝層（§6.3）：python-web v1 首波涵蓋 Flask（FastAPI 由 requirements 隨 build 補）
 RUN pip install --no-cache-dir "flask==3.0.3"
 
 # /aegis/out 由 entrypoint chown 給 65532（§17.10）
 RUN chmod +x /aegis/pack/entrypoint.py \
+    && chmod +x /aegis/observer-proxy \
     && cp /aegis/pack/entrypoint.py /aegis/entrypoint.py
 
 ENV PYTHONPATH=/aegis/pack \

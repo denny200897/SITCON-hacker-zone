@@ -341,7 +341,9 @@ func TestOpenAICompatEmptyResponseRefusal(t *testing.T) {
 // *Error{StatusCode, Body}，只看 HTTP 狀態碼。
 func TestOpenAICompatHTTPErrorClassification(t *testing.T) {
 	for _, status := range []int{400, 401, 429, 500, 503} {
-		srv, _ := newCaptureServer(t, []openAIResponse{simpleContentReply("stop")}, status)
+		// Transient statuses are retried; keep returning the same error so this
+		// test verifies exhaustion rather than accidental recovery.
+		srv, _ := newCaptureServer(t, []openAIResponse{simpleContentReply("stop")}, status, status, status)
 		a := newCompat(t, srv)
 		resp, err := a.Chat(context.Background(), ChatRequest{Model: "m"})
 		if err == nil {

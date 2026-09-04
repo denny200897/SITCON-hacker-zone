@@ -21,11 +21,12 @@ import (
 	"os/exec"
 	"path"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // StageFiles 是一次注入的內容：key 為容器內 /aegis/witness/ 下的相對路徑
-//（不含 "witness/" 前綴，由呼叫端剝除），value 為檔案內容。
+// （不含 "witness/" 前綴，由呼叫端剝除），value 為檔案內容。
 type StageFiles map[string][]byte
 
 // WitnessVolumeName 組出 per-run witness volume 名。
@@ -54,7 +55,7 @@ func validateStageName(name string) error {
 
 // stageTar 把 files（可含巢狀目錄）與 payload 組成 tar bytes。
 // 檔名須先過 validateStageName；payload 以 PayloadStagedName 寫在 volume 根
-//（subpath 掛載的來源檔，須於 docker create 前存在）。
+// （subpath 掛載的來源檔，須於 docker create 前存在）。
 // mode 0644、uid/gid 0：容器內 non-root user（65532）可讀。
 func stageTar(files StageFiles, payload []byte) ([]byte, error) {
 	names := make([]string, 0, len(files)+1)
@@ -122,7 +123,7 @@ func (r *Runner) StageWitness(ctx context.Context, runID string, files StageFile
 	stageArgs := []string{
 		"create", "--name", "aegis-stage-" + runID,
 		"--label", LabelRunID + "=" + runID,
-		"-v", vol+":/stage",
+		"-v", vol + ":/stage",
 		r.HelperImage, "true",
 	}
 	if _, stderr, err := r.runCtx(ctx, 60*time.Second, stageArgs...); err != nil {
@@ -151,6 +152,18 @@ func (r *Runner) cpTarStdin(ctx context.Context, cid, dest string, tarBytes []by
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, r.bin(), "cp", "-", cid+":"+dest)
+	// docker may be a wrapper script (and in production may spawn helper
+	// processes).  Killing only the direct process leaves descendants holding
+	// stdin/stderr open, so Wait can block until the host timeout.  Give the
+	// command its own process group and terminate the whole group on cancel.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 2 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("sandbox: cp stdin pipe: %w", err)

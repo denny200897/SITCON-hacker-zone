@@ -89,14 +89,15 @@ func specErr(reason string) *SpecError { return &SpecError{Reason: reason} }
 
 // Template 是本套件所需的模板元資料（整合時由 packs.Manifest 的 TemplateEntry 滿足）。
 type Template struct {
-	TemplateID   string
-	Family       string
-	RunMode      string // "witness" | "direct"（template 支援的單一模式，§17.9-1）
-	AllowedFiles []string
-	ServiceCmd   string
-	ServicePort  int
-	WaitFor      string
-	Image        string // 必為 digest 形式（§17.10：永不使用可變 tag）
+	TemplateID    string
+	Family        string
+	RunMode       string // "witness" | "direct"（template 支援的單一模式，§17.9-1）
+	AllowedFiles  []string
+	ServiceCmd    string
+	ServicePort   int
+	WaitFor       string
+	Image         string // 必為 digest 形式（§17.10：永不使用可變 tag）
+	ObserverImage string // optional digest-pinned trusted observer sidecar
 }
 
 // Oracle 是本套件所需的 oracle 元資料（整合時由 packs.Manifest 的 OracleEntry 滿足；
@@ -406,12 +407,19 @@ func assemble(in Input, tmpl *Template, files [][2]string, payload, kind, nonce 
 	if len(fileMap) == 0 {
 		fileMap = map[string]any{} // 空檔集維持 JSON object
 	}
-	return map[string]any{
-		"run_id":  in.RunID,
-		"kind":    kind,
-		"image":   tmpl.Image, // digest 形式（assemble 前已檢查，見 compile 檢查）
-		"files":   fileMap,
-		"payload": replaceNonce(payload, nonce), // 以 docker cp 寫入 /aegis/payload.txt
+	network := Network
+	observer := map[string]any(nil)
+	if tmpl.ObserverImage != "" {
+		network = "ssrf-internal"
+		observer = map[string]any{"image": tmpl.ObserverImage, "address": "observer:8787"}
+	}
+	out := map[string]any{
+		"run_id":    in.RunID,
+		"kind":      kind,
+		"oracle_id": in.Spec["oracle_id"],
+		"image":     tmpl.Image, // digest 形式（assemble 前已檢查，見 compile 檢查）
+		"files":     fileMap,
+		"payload":   replaceNonce(payload, nonce), // 以 docker cp 寫入 /aegis/payload.txt
 		"mounts": []any{map[string]any{
 			"src": "TARGET_SNAPSHOT", "dst": "/target", "readonly": true,
 		}},
@@ -419,7 +427,7 @@ func assemble(in Input, tmpl *Template, files [][2]string, payload, kind, nonce 
 		"service": map[string]any{
 			"cmd": tmpl.ServiceCmd, "port": int64(tmpl.ServicePort), "wait_for": tmpl.WaitFor,
 		},
-		"network":     Network,
+		"network":     network,
 		"nonce":       nonce,
 		"timeout_sec": int64(TimeoutSec),
 		"caps": map[string]any{
@@ -431,4 +439,8 @@ func assemble(in Input, tmpl *Template, files [][2]string, payload, kind, nonce 
 			"aegis.run_id": in.RunID, "aegis.snapshot_id": in.SnapshotID, "aegis.kind": kind,
 		},
 	}
+	if observer != nil {
+		out["observer"] = observer
+	}
+	return out
 }

@@ -4,11 +4,12 @@
   "title": "RunRequest",
   "description": "由 policy compiler 組裝；模型永不直接產生容器請求（不變式 1）",
   "type": "object",
-  "required": ["run_id", "kind", "image", "files", "mounts", "cmd", "network", "nonce", "timeout_sec", "caps"],
+  "required": ["run_id", "kind", "oracle_id", "image", "files", "mounts", "cmd", "network", "nonce", "timeout_sec", "caps"],
   "additionalProperties": false,
   "properties": {
     "run_id": {"type": "string", "pattern": "^R-[0-9]{4}$"},
     "kind": {"type": "string", "enum": ["negative", "positive", "exploit"]},
+    "oracle_id": {"type": "string"},
     "image": {
       "type": "string",
       "pattern": "^.*@sha256:[0-9a-f]{64}$",
@@ -47,6 +48,15 @@
         "cmd": {"type": "string"},
         "port": {"type": "integer", "minimum": 1, "maximum": 65535},
         "wait_for": {"type": "string"}
+      }
+    },
+    "observer": {
+      "type": "object",
+      "required": ["image", "address"],
+      "additionalProperties": false,
+      "properties": {
+        "image": {"type": "string", "pattern": "^.*@sha256:[0-9a-f]{64}$"},
+        "address": {"type": "string", "pattern": "^[A-Za-z0-9._-]+:[0-9]{1,5}$"}
       }
     },
     "network": {"type": "string", "enum": ["none", "ssrf-internal"]},

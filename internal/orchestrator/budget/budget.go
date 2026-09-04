@@ -13,18 +13,18 @@ import (
 
 // Budget 是單一 finding 的證明預算上限（§5.4 [budget]；§9.1 各分類各走各的計數器）。
 type Budget struct {
-	MaxEnv           int // env 修正上限（build／映像／provider／transport）
-	MaxHarness       int // harness 修正上限（witness 接線、exploit 腳本 bug）
-	MaxHypotheses    int // 不同攻擊鏈假設數上限
+	MaxEnv            int // env 修正上限（build／映像／provider／transport）
+	MaxHarness        int // harness 修正上限（witness 接線、exploit 腳本 bug）
+	MaxHypotheses     int // 不同攻擊鏈假設數上限
 	MaxSandboxMinutes int // 沙箱時數上限（防 hang，非防花費；§9.4）
 }
 
 // Default 回傳 §5.4 的預設預算：env 5／harness 8／hypotheses 3／sandbox 10 分鐘。
 func Default() Budget {
 	return Budget{
-		MaxEnv:           5,
-		MaxHarness:       8,
-		MaxHypotheses:    3,
+		MaxEnv:            5,
+		MaxHarness:        8,
+		MaxHypotheses:     3,
 		MaxSandboxMinutes: 10,
 	}
 }
@@ -86,7 +86,7 @@ type Verdict struct {
 
 // Classify 依 §19 決策樹分類——依序第一個命中者生效。
 // prevFailureSig 是上一個失敗 run 的簽名；分類樹本身不依賴它
-//（振盪判定由呼叫端比較簽名得 sameSigCount 後交給 OnFailure），
+// （振盪判定由呼叫端比較簽名得 sameSigCount 後交給 OnFailure），
 // 保留於簽名是為了讓呼叫端能在單一呼叫點完成「分類＋簽名鏈維護」。
 func (b Budget) Classify(o RunOutcome, prevFailureSig string) (Verdict, error) {
 	_ = prevFailureSig // 見函式註解：分類為純函式，簽名鏈由呼叫端維護
@@ -144,9 +144,9 @@ func (b Budget) Classify(o RunOutcome, prevFailureSig string) (Verdict, error) {
 
 // Stop 是 §9.3 的停止判定結果。Stop 為 nil 表示繼續 prover 迴圈。
 type Stop struct {
-	Terminal           string               // PROVEN|HYPOTHESIS_REJECTED|NOT_PROVEN|ENV_ERROR（domain.Verification）
+	Terminal           string                 // PROVEN|HYPOTHESIS_REJECTED|NOT_PROVEN|ENV_ERROR（domain.Verification）
 	Reason             domain.NotProvenReason // 僅 NOT_PROVEN 時為閉集原因，其餘為 ""
-	HypothesisRejected bool                 // 該假設（或全部假設）被否證
+	HypothesisRejected bool                   // 該假設（或全部假設）被否證
 }
 
 // OnFailure 依 §9.3 扣抵計數器並判定停止條件（全部由 orchestrator 判定，模型無權放棄）。

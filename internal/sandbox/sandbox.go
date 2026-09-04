@@ -171,7 +171,7 @@ func (r *Runner) Kill(cid string) error {
 // ctx 為呼叫端取消通道（使用者取消、Prove(ctx) 取消）：取消即時終止 docker start
 // 並 docker kill <cid>，回傳包 context.Canceled 的錯誤（P2-2：不得自建 background
 // timeout 無視外層取消）。逾時語意不變：timeoutSec 到點 → docker kill 並記 exit 124
-//（macOS 無 timeout(1)，故不用外部 timeout 指令）。
+// （macOS 無 timeout(1)，故不用外部 timeout 指令）。
 // 容器以非零 exit code 結束（含 124/125/126/127）不是 Go 層錯誤——回 (code, nil)，
 // 由 orchestrator 依 domain.ExitClassifies 分類（§17.1 exit code 閉集）。
 func (r *Runner) Start(ctx context.Context, cid string, timeoutSec int) (exit int, err error) {
@@ -220,7 +220,7 @@ func (r *Runner) Start(ctx context.Context, cid string, timeoutSec int) (exit in
 
 // Diff 解析 docker diff 輸出：C=modified、A=added；D=deleted 不回傳（原始輸出由
 // Reclaim 完整落 fs_diff.txt）。忽略 /aegis/out（named volume）與 tmpfs 路徑 /tmp、/run
-//——它們不在容器 rootfs 層，本來就不計 diff，此處為雙保險。
+// ——它們不在容器 rootfs 層，本來就不計 diff，此處為雙保險。
 func (r *Runner) Diff(cid string) (added, modified []string, err error) {
 	out, stderr, err := r.runTimeout(30*time.Second, "diff", cid)
 	if err != nil {
@@ -268,6 +268,10 @@ func ignoreDiffPath(path string) bool {
 // non-root／read-only／tmpfs／pids／memory／cpus／nofile；network none；aegis-out
 // volume 唯讀掛 /from、destDir 可寫掛 /to（收回 helper 是唯一例外，§17.6）。
 func reclaimHelperArgs(runID, destDir, seccomp, image string) ([]string, error) {
+	return reclaimHelperArgsWithObserver(runID, destDir, seccomp, image, false)
+}
+
+func reclaimHelperArgsWithObserver(runID, destDir, seccomp, image string, observer bool) ([]string, error) {
 	hardening, err := HardeningFlags(seccomp)
 	if err != nil {
 		return nil, err
@@ -278,9 +282,16 @@ func reclaimHelperArgs(runID, destDir, seccomp, image string) ([]string, error) 
 		"--network", NetworkNone,
 		"-v", OutVolumePrefix+runID+":/from:ro",
 		"-v", destDir+":/to",
-		image,
-		"cp", "-a", "/from/.", "/to/",
 	)
+	if observer {
+		args = append(args, "-v", TrustedVolumePrefix+runID+":/trusted:ro")
+	}
+	args = append(args, image)
+	if observer {
+		args = append(args, "sh", "-c", "cp -a /from/. /to/ && cp -a /trusted/. /to/")
+	} else {
+		args = append(args, "cp", "-a", "/from/.", "/to/")
+	}
 	return args, nil
 }
 
@@ -296,6 +307,11 @@ func reclaimHelperArgs(runID, destDir, seccomp, image string) ([]string, error) 
 //
 // 禁止任何 host 目錄以可寫模式掛入證明 run 容器；收回 helper 是唯一例外（§17.6）。
 func (r *Runner) Reclaim(ctx context.Context, cid, runID, destDir, seccomp string) error {
+	return r.ReclaimWithObserver(ctx, cid, runID, destDir, seccomp, false)
+}
+
+// ReclaimWithObserver also shuts down and removes the trusted observer sidecar.
+func (r *Runner) ReclaimWithObserver(ctx context.Context, cid, runID, destDir, seccomp string, observer bool) error {
 	if cid == "" {
 		return fmt.Errorf("sandbox: Reclaim 的 cid 為空")
 	}
@@ -326,7 +342,7 @@ func (r *Runner) Reclaim(ctx context.Context, cid, runID, destDir, seccomp strin
 	case !digestRe.MatchString(r.HelperImage):
 		setErr(fmt.Errorf("sandbox: HelperImage 須為 digest 形式（<name>@sha256:<64hex>，§17.6），got %q", r.HelperImage))
 	default:
-		helperArgs, hErr := reclaimHelperArgs(runID, destDir, seccomp, r.HelperImage)
+		helperArgs, hErr := reclaimHelperArgsWithObserver(runID, destDir, seccomp, r.HelperImage, observer)
 		if hErr != nil {
 			setErr(hErr)
 			break
@@ -349,6 +365,11 @@ func (r *Runner) Reclaim(ctx context.Context, cid, runID, destDir, seccomp strin
 	// witness 注入 volume（ADR 0002）一併收回；不存在視為已清。
 	if wErr := r.RemoveWitnessVolume(runID); wErr != nil {
 		setErr(wErr)
+	}
+	if observer {
+		if oErr := r.StopObserver(runID); oErr != nil {
+			setErr(oErr)
+		}
 	}
 	return firstErr
 }
@@ -396,6 +417,9 @@ func (r *Runner) Reaper(runID string) error {
 		if firstErr == nil {
 			firstErr = wrapErr("reaper network rm", stderr, err)
 		}
+	}
+	if vErr := r.removeVolumeRetry(TrustedVolumePrefix + runID); vErr != nil && firstErr == nil {
+		firstErr = vErr
 	}
 	return firstErr
 }

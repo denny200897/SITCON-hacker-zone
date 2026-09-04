@@ -31,8 +31,9 @@ const (
 	PayloadPath = "/aegis/payload.txt"
 
 	// OutVolumePrefix／SSRFNetPrefix 組出 per-run 的 named volume 與 ssrf network 名。
-	OutVolumePrefix = "aegis-out-"
-	SSRFNetPrefix   = "aegis-ssrf-"
+	OutVolumePrefix     = "aegis-out-"
+	TrustedVolumePrefix = "aegis-trusted-"
+	SSRFNetPrefix       = "aegis-ssrf-"
 
 	// WitnessVolumePrefix 組出 per-run 的注入 staging volume 名（§17.4-4 的
 	// docker cp 機制在 docker 29 對 --read-only rootfs 不可行，ADR 0002）。
@@ -78,7 +79,8 @@ type RunSpec struct {
 	// Env 是 service 接線環境變數（AEGIS_SERVICE_CMD／AEGIS_SERVICE_PORT／
 	// AEGIS_HEALTH_PATH）；值來自 policy RunRequest.service，不是模型輸入。
 	// 每項須為 KEY=VALUE 形式，KEY 符合 [A-Za-z_][A-Za-z0-9_]*。
-	Env []string
+	Env           []string
+	ObserverImage string // optional digest-pinned sidecar image
 }
 
 var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
@@ -143,6 +145,9 @@ func DockerArgs(req RunSpec, snapshotDir string) ([]string, error) {
 		netArgs = []string{"--network", SSRFNetPrefix + req.RunID}
 	default:
 		return nil, fmt.Errorf("sandbox: Network 須為 %q 或 %q，got %q", NetworkNone, NetworkSSRFInternal, req.Network)
+	}
+	if req.ObserverImage != "" && !digestRe.MatchString(req.ObserverImage) {
+		return nil, fmt.Errorf("sandbox: ObserverImage 須為 digest 形式，拒收：%q", req.ObserverImage)
 	}
 
 	// --env：service 接線環境變數（entrypoint 契約）；KEY=VALUE 形式檢查後逐項加入。
@@ -209,4 +214,3 @@ func canonicalHostDir(dir string) (string, error) {
 	}
 	return clean, nil
 }
-

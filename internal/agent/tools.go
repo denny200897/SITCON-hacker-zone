@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/aegis-dev/aegis/internal/llm"
+	"github.com/aegis-dev/aegis/internal/redaction"
 )
 
 // 輸出頻寬上限（§18.2 回饋頻寬有界的工具面：防 context 爆炸）。
@@ -41,11 +42,17 @@ type ToolRegistry struct {
 	// OnSubmit 是 submit_witness_spec 閘（prover 專用；nil 時任何提交都拒絕）。
 	OnSubmit SubmitHandler
 	// audit 記錄器；nil 時不記（僅測試）。
-	audit *AuditLog
+	audit        *AuditLog
+	acceptedSpec bool
 }
 
 // SetAudit 綁定 audit log。
 func (t *ToolRegistry) SetAudit(a *AuditLog) { t.audit = a }
+
+// ResetSession clears the one-accepted-spec terminal guard for a newly created
+// prover session. It does not clear the prover's cross-session duplicate hash
+// set, which is owned by the orchestrator.
+func (t *ToolRegistry) ResetSession() { t.acceptedSpec = false }
 
 // Result 是單一工具執行結果（回填為 tool_result）。
 type Result struct {
@@ -56,13 +63,26 @@ type Result struct {
 // Execute 執行一次工具呼叫：白名單閘 → 工具本體；每次呼叫記 audit（§18.1 閘 a）。
 // assistantText 為本輪 assistant 文字（submit 的三行 preamble 驗證用）。
 func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, input json.RawMessage, assistantText string) Result {
+	if t.audit == nil {
+		return Result{Content: "policy_denied: audit log unavailable（fail-closed）", IsError: true}
+	}
+	auditInput := input
+	if redaction.HasSecret(string(input)) {
+		// Do not persist the offending value in audit.jsonl. The call is still
+		// rejected below, so callers cannot use the audit stream as an exfil path.
+		auditInput = json.RawMessage(`{"redacted":"secret pattern detected"}`)
+	}
 	if !HasWhitelist(role, tool) {
-		t.audit.Append(role, tool, input, AuditDenied, "not_in_whitelist")
+		t.audit.Append(role, tool, auditInput, AuditDenied, "not_in_whitelist")
 		return Result{Content: "policy_denied: 工具不在角色白名單（§18.1）", IsError: true}
 	}
 	if tool == "submit_witness_spec" && t.OnSubmit == nil {
-		t.audit.Append(role, tool, input, AuditDenied, "no_submit_handler")
+		t.audit.Append(role, tool, auditInput, AuditDenied, "no_submit_handler")
 		return Result{Content: "policy_denied: 本 session 未開放提交", IsError: true}
+	}
+	if tool == "submit_witness_spec" && t.acceptedSpec {
+		t.audit.Append(role, tool, auditInput, AuditDenied, "spec_already_accepted")
+		return Result{Content: "policy_denied: 本 session 已接受 WitnessSpec", IsError: true}
 	}
 
 	var res Result
@@ -86,7 +106,7 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 			decision = AuditDenied
 		}
 	}
-	t.audit.Append(role, tool, input, decision, "")
+	t.audit.Append(role, tool, auditInput, decision, "")
 	return res
 }
 
@@ -137,6 +157,9 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		return Result{Content: "read_code 失敗：" + err.Error(), IsError: true}
+	}
+	if redaction.HasSecret(string(data)) {
+		return Result{Content: "policy_denied: read_code 輸出命中 secret pattern，已停止（請先人工確認）", IsError: true}
 	}
 	lines := bytes.Split(data, []byte("\n"))
 	start, end := args.Start, args.End
@@ -204,6 +227,9 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 			}
 			if re.Match(line) {
 				text := string(line)
+				if redaction.HasSecret(text) {
+					return filepath.SkipAll
+				}
 				if len(text) > MaxSearchLine {
 					text = text[:MaxSearchLine]
 				}
@@ -278,8 +304,8 @@ type semgrepHit struct {
 func parseSemgrepJSON(data []byte, ruleID string) ([]semgrepHit, error) {
 	var parsed struct {
 		Results []struct {
-			Path   string `json:"path"`
-			Start  struct {
+			Path  string `json:"path"`
+			Start struct {
 				Line int64 `json:"line"`
 			} `json:"start"`
 			Extra struct {
@@ -308,6 +334,9 @@ func (t *ToolRegistry) submit(ctx context.Context, role llm.Role, input json.Raw
 	if !accepted {
 		t.audit.Append(role, "submit_witness_spec", input, AuditDenied, feedback)
 		return Result{Content: "spec_rejected: " + feedback, IsError: true}
+	}
+	if feedback == "accepted" {
+		t.acceptedSpec = true
 	}
 	return Result{Content: feedback}
 }

@@ -28,7 +28,7 @@
       "service_port": 8000,
       "wait_for": "GET /healthz",
       "health_path": "/healthz",
-      "image": "aegis-python-web@sha256:612e103c134210bfcf49b7ef9393418f3f25da16937f44ba77c3dba0c0b6e77c"
+      "image": "localhost:5000/aegis-python-web@sha256:48452b552cdf476f9399c3f5c9ceb709301ac592743ae2f4cb99d8e32b2c7b25"
     },
     {
       "template_id": "py/http-endpoint-direct/v3",
@@ -43,7 +43,7 @@
       "service_port": 8000,
       "wait_for": "GET /healthz",
       "health_path": "/healthz",
-      "image": "aegis-python-web@sha256:612e103c134210bfcf49b7ef9393418f3f25da16937f44ba77c3dba0c0b6e77c"
+      "image": "localhost:5000/aegis-python-web@sha256:48452b552cdf476f9399c3f5c9ceb709301ac592743ae2f4cb99d8e32b2c7b25"
     }
   ],
   "oracles": [
@@ -87,7 +87,8 @@
   ],
   "images": {
     "helper/alpine": "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc",
-    "helper/ast": "aegis-python-web@sha256:612e103c134210bfcf49b7ef9393418f3f25da16937f44ba77c3dba0c0b6e77c"
+    "helper/ast": "aegis-python-web@sha256:612e103c134210bfcf49b7ef9393418f3f25da16937f44ba77c3dba0c0b6e77c",
+    "observer/sqlite": "localhost:5000/aegis-python-web@sha256:48452b552cdf476f9399c3f5c9ceb709301ac592743ae2f4cb99d8e32b2c7b25"
   },
   "sink_types": [
     {

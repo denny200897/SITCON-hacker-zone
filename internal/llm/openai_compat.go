@@ -196,7 +196,7 @@ func (a *OpenAICompatAdapter) Chat(ctx context.Context, req ChatRequest) (Respon
 		return Response{}, fmt.Errorf("llm: openai-compat 請求編碼失敗：%w", err)
 	}
 
-	status, raw, err := a.post(ctx, payload)
+	status, raw, err := a.postWithRetry(ctx, payload)
 	if err != nil {
 		// 傳輸層錯誤／context 取消：非 HTTP 狀態碼，不做錯誤分類（§18.3），
 		// 也不自動重試（簡單優先）。
@@ -215,7 +215,7 @@ func (a *OpenAICompatAdapter) Chat(ctx context.Context, req ChatRequest) (Respon
 			if mErr != nil {
 				return Response{}, fmt.Errorf("llm: openai-compat 請求編碼失敗：%w", mErr)
 			}
-			status, raw, err = a.post(ctx, payload2)
+			status, raw, err = a.postWithRetry(ctx, payload2)
 			if err != nil {
 				return Response{}, err
 			}
@@ -360,6 +360,32 @@ func (a *OpenAICompatAdapter) post(ctx context.Context, payload []byte) (int, []
 		return 0, nil, fmt.Errorf("llm: openai-compat 讀取回應失敗：%w", err)
 	}
 	return httpResp.StatusCode, raw, nil
+}
+
+// postWithRetry retries only transient HTTP failures. 4xx responses other than
+// 429 are returned immediately, preserving the provider's deterministic error
+// classification; context cancellation always wins over the backoff.
+func (a *OpenAICompatAdapter) postWithRetry(ctx context.Context, payload []byte) (int, []byte, error) {
+	for attempt := 0; attempt < 3; attempt++ {
+		status, raw, err := a.post(ctx, payload)
+		if err != nil {
+			return status, raw, err
+		}
+		if status != http.StatusTooManyRequests && (status < 500 || status > 599) {
+			return status, raw, nil
+		}
+		if attempt == 2 {
+			return status, raw, nil
+		}
+		t := time.NewTimer(time.Duration(50*(attempt+1)) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return 0, nil, ctx.Err()
+		case <-t.C:
+		}
+	}
+	return 0, nil, fmt.Errorf("llm: openai-compat retry state invalid")
 }
 
 // redactBody 把非 2xx 回應體做成 *Error.Body：先遮蔽金鑰（防供應商把 header

@@ -171,13 +171,19 @@ M  internal/sandbox/sandbox_test.go
 
 本文件也是本次新增的未提交檔案。正式封版前應在預定提交內容上再次執行相同指令，並確認乾淨 checkout 可重現結果。
 
-## 待完成項目
+## 修補後驗收
 
-1. 先修復下方 P0／P1 code review findings，再補相應 adversarial tests；未修前不可接受 `PROVEN`。
-2. 新增格式合法但指向不存在／不符實際映像的 digest adversarial integration test，明確斷言 Docker create/run 被拒。
-3. 新增 `tests/contracts`，至少讓 M0a 的 11 個 schema 各有 valid fixture，並涵蓋 `$ref` 關係及代表性 invalid fixture。
-4. 將 M0c 與 sandbox 測試變更納入正式提交後，從乾淨 checkout 重跑 `go test -v ./... -count=1` 與 `go vet ./...`。
-5. 建議將 canonical hash API 收窄為 `map[string]any` 或加入 runtime type rejection，避免未來誤把 struct 放入 hash 路徑。
+交接後已完成原待辦中的信任邊界修補，並新增 `tests/contracts/contracts_test.go`、合法但不存在 digest 的 `TestCreateRejectsUnknownDigest`，以及 struct canonical input rejection。M0b 已在本機 Docker（Linux arm64 observer binary）實際跑通；trusted observer 與 witness 分離，且 evidence 綁定 artifact hashes。
+
+驗證結果：`go test ./...`、`go vet ./...`、`git diff --check` 均通過。
+
+## 原待辦完成狀態
+
+1. ✅ P0／P1 trust-boundary findings 已修復並有對應測試。
+2. ✅ `TestCreateRejectsUnknownDigest` 明確斷言合法格式但不存在的 image digest 被 Docker create 拒絕。
+3. ✅ `tests/contracts` 為 11 個 schema 提供 valid fixtures，並驗證 evidence → run_result `$ref`。
+4. ✅ 全套 `go test ./...` 與 `go vet ./...` 通過；目前工作樹尚未 commit。
+5. ✅ canonical API 在 runtime 拒絕 struct，僅接受 `map[string]any`。
 
 ## 詳細 Code Review（2026-09-04）
 

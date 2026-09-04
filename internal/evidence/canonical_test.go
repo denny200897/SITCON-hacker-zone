@@ -103,23 +103,17 @@ func TestNumFormatsFixedTwo(t *testing.T) {
 }
 
 func TestStructHashRejectedByConvention(t *testing.T) {
-	// §21.4 規則 1：canonical() 對 struct 會照樣 encode（欄位序），但 Hash 的契約
-	// 是呼叫端只傳 map。此測試鎖定 canonical 輸出對 struct 的行為不可進 Hash 路徑：
-	// 直接驗證 canonical(struct) 與 map 排序後不同，提醒不得拿 struct 結果當 hash。
+	// §21.4 規則 1：canonical/hash 的輸入邊界拒絕 struct，避免欄位宣告順序
+	// 被誤當成穩定的 canonical map 順序。
 	type s struct {
 		B int `json:"b"`
 		A int `json:"a"`
 	}
-	sb, _ := CanonicalBytes(s{2, 1})
-	mb, _ := CanonicalBytes(map[string]any{"b": s{2, 1}.B, "a": s{2, 1}.A})
-	if string(sb) != `{"b":2,"a":1}` {
-		t.Fatalf("struct path changed; fixture rot: %s", sb)
+	if _, err := CanonicalBytes(s{2, 1}); err == nil {
+		t.Fatal("struct canonical input accepted")
 	}
-	if string(mb) != `{"a":1,"b":2}` {
-		t.Fatalf("map path: %s", mb)
-	}
-	if string(sb) == string(mb) {
-		t.Fatal("struct and map serialization identical — struct path must never be used for hashing")
+	if _, err := Hash(s{2, 1}); err == nil {
+		t.Fatal("struct hash input accepted")
 	}
 }
 

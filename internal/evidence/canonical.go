@@ -18,6 +18,9 @@ const CanonicalVersion = "canonical-v1"
 // 無空白（Encoder 預設）、無尾換行、SetEscapeHTML(false)。
 // v 必為 map[string]any——禁止對 struct 做 canonical hash（欄位依宣告順序、不排序）。
 func canonical(v any) ([]byte, error) {
+	if _, ok := v.(map[string]any); !ok {
+		return nil, fmt.Errorf("evidence: canonical input must be map[string]any, got %T", v)
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false) // 否則 < > & 會被轉義成 < 等形式

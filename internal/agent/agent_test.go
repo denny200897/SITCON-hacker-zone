@@ -13,7 +13,12 @@ import (
 
 func newTestRegistry(t *testing.T, snapshotDir string) *ToolRegistry {
 	t.Helper()
-	return &ToolRegistry{SnapshotDir: snapshotDir}
+	al, err := OpenAuditLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = al.Close() })
+	return &ToolRegistry{SnapshotDir: snapshotDir, audit: al}
 }
 
 // TestPathInSnapshot：越界（".."、絕對路徑外、symlink 逃逸）一律拒絕（§18.1）。

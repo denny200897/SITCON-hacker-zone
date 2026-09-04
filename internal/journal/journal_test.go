@@ -3,6 +3,7 @@ package journal
 import (
 	"encoding/json"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -239,7 +240,12 @@ func TestEventsRoundTripSchema(t *testing.T) {
 	}
 
 	reg := schemav.New()
-	if err := reg.LoadDir("/Users/mac/Documents/code/aiproject/SITCON-hacker-zone/schemas"); err != nil {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("無法定位測試檔案")
+	}
+	schemasDir := filepath.Join(filepath.Dir(file), "..", "..", "schemas")
+	if err := reg.LoadDir(schemasDir); err != nil {
 		t.Fatalf("載入 schemas： %v", err)
 	}
 	events, err := j.Events()

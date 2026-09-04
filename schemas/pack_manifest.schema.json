@@ -48,7 +48,7 @@
           "health_path": {"type": "string"},
           "image": {
             "type": "string",
-            "pattern": "^[a-zA-Z0-9._/-]+@sha256:[0-9a-f]{64}$",
+            "pattern": "^[a-zA-Z0-9._:/-]+@sha256:[0-9a-f]{64}$",
             "description": "每 template 對應映像檔的 digest（可選——無則走 §17.10 解析序：本地 images.json → ENV_ERROR）；可變 tag 拒絕（§6.4）"
           }
         }
@@ -100,7 +100,7 @@
       "description": "輔助映像 digest（deps helper、ast helper、alpine 收回 helper、listener sidecar）",
       "additionalProperties": {
         "type": "string",
-        "pattern": "^[a-zA-Z0-9._/-]+@sha256:[0-9a-f]{64}$"
+        "pattern": "^[a-zA-Z0-9._:/-]+@sha256:[0-9a-f]{64}$"
       }
     },
     "sink_types": {

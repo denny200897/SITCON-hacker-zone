@@ -28,10 +28,11 @@ import (
 	"github.com/aegis-dev/aegis/internal/journal"
 	"github.com/aegis-dev/aegis/internal/llm"
 	"github.com/aegis-dev/aegis/internal/orchestrator/budget"
+	"github.com/aegis-dev/aegis/internal/redaction"
 )
 
 // ProveFunc 是決定性三控制 run 執行器的注入點：正式接線用 (*Prover).Prove
-//（單次預算，預算管理上移到本迴圈）；單元測試注入假實作即可驅動整個迴圈，
+// （單次預算，預算管理上移到本迴圈）；單元測試注入假實作即可驅動整個迴圈，
 // 不必起 docker。
 type ProveFunc func(context.Context, ProveInput) (*ProveResult, error)
 
@@ -110,7 +111,7 @@ type AgentProver struct {
 
 // Run 執行 prover 迴圈至 §9.3 終態。
 func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
-	if ap.Prove == nil || ap.Adapter == nil || ap.Tools == nil {
+	if ap.Prove == nil || ap.Adapter == nil || ap.Tools == nil || ap.Journal == nil || ap.ValidateSpec == nil {
 		return nil, fmt.Errorf("orchestrator: AgentProver 缺 Prove／Adapter／Tools")
 	}
 
@@ -149,6 +150,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 				domain.FailureHarness, append(attempts, rec), learned, "")
 		}
 
+		ap.Tools.ResetSession()
 		runtime := &agent.Runtime{Adapter: ap.Adapter, Tools: ap.Tools, MaxTurns: ap.sessionTurns()}
 		resp, history, err := runtime.Run(ctx, ap.chatRequest(msgs))
 		if err != nil {
@@ -166,6 +168,24 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 				return ap.stopResult(stop, attempts, learned, "")
 			}
 			msgs = append(msgs, userText(ap.operatorError(err.Error())))
+			feedbackSeen = true
+			continue
+		}
+
+		// refusal／截斷是 provider/environment failure，不可誤標成「模型沒有假設」。
+		if resp.StopReason == llm.StopRefusal || resp.StopReason == llm.StopMaxTokens {
+			rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotRun),
+				FailureClass: string(domain.FailureEnv), Note: "llm_stop: " + string(resp.StopReason)}
+			attempts = append(attempts, rec)
+			if freshRound {
+				return ap.terminal(domain.Verification(pendingTerminal.Terminal), pendingTerminal.Reason, domain.FailureEnv, attempts, learned, "")
+			}
+			stop := ap.Budget.OnFailure(budget.Verdict{Class: domain.FailureEnv}, &counters, 0)
+			if stop != nil {
+				return ap.stopResult(stop, attempts, learned, "")
+			}
+			msgs = history
+			msgs = append(msgs, userText(ap.operatorError("provider 回應被拒絕或截斷；請縮短調查並重試")))
 			feedbackSeen = true
 			continue
 		}
@@ -202,7 +222,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 			if stop != nil {
 				return ap.stopResult(stop, attempts, learned, "")
 			}
-			msgs = append(msgs, history...)
+			msgs = history
 			msgs = append(msgs, userText(ap.operatorError("session 結束但未提交 WitnessSpec；請以 read_code／search_code 調查後以 submit_witness_spec 提交假設（payload 必含 {{NONCE}}）")))
 			feedbackSeen = true
 			continue
@@ -234,7 +254,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 			if stop != nil {
 				return ap.stopResult(stop, attempts, learned, strField(spec, "oracle_id"))
 			}
-			msgs = append(msgs, history...)
+			msgs = history
 			msgs = append(msgs, userText(ap.operatorError(perr.Error())))
 			feedbackSeen = true
 			continue
@@ -287,7 +307,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 		}
 
 		// 續跑：operator 回饋（§18.2 有界 tails；nonce 不出現）。
-		msgs = append(msgs, history...)
+		msgs = history
 		msgs = append(msgs, userText(ap.operatorRunOutcome(res, counters)))
 		feedbackSeen = true
 	}
@@ -391,13 +411,17 @@ func (ap *AgentProver) journalSpecRejected(reason string) {
 // ---- prompt 組裝（§18.4） ----
 
 // findingPrompt 組 session 的第一則 user 訊息；fresh=true 時不帶任何先前失敗敘事
-//（fresh-eyes §9.3——只有原始資料與一句 dry 說明）。
+// （fresh-eyes §9.3——只有原始資料與一句 dry 說明）。
 func (ap *AgentProver) findingPrompt(fresh bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "finding_id: %s\nreachability: %s\ntarget_symbol: %s\noracle_id: %s\nsnapshot_id: %s\n\n",
 		ap.Finding.FindingID, ap.Finding.Reachability, ap.Finding.TargetSymbol,
 		ap.Finding.OracleID, ap.Finding.SnapshotID)
-	b.WriteString("sink 鄰域（§18.4，非全 repo）：\n```\n" + ap.Finding.Context + "\n```\n\n")
+	contextText := ap.Finding.Context
+	if redaction.HasSecret(contextText) {
+		contextText = "[redacted: sink context 命中 secret pattern；需人工確認後再繼續]"
+	}
+	b.WriteString("sink 鄰域（§18.4，非全 repo）：\n```\n" + contextText + "\n```\n\n")
 	b.WriteString("請以 read_code／search_code 調查後，以 submit_witness_spec 提交 WitnessSpec" +
 		"（payload 必含 {{NONCE}} 或 {{NONCE_HEX}}）。提交後由 harness 執行 negative → positive → exploit 三控制 run。\n")
 	if fresh {
@@ -415,6 +439,7 @@ func (ap *AgentProver) chatRequest(msgs []llm.Message) llm.ChatRequest {
 		Messages: msgs,
 		Tools:    ap.ToolDefs,
 		Effort:   EffortProver,
+		Stream:   true,
 	}
 }
 
@@ -432,7 +457,7 @@ func (ap *AgentProver) operatorRunOutcome(res *ProveResult, counters budget.Coun
 		// run_id／kind 為最後一個 run（miss／控制點失敗都發生在最後一個 run）。
 		"run_id": last.RunID, "kind": last.Kind, "exit": last.Exit,
 		"oracle": map[string]any{
-			"result":           last.VulnOracle,
+			"result": last.VulnOracle,
 			"observed_summary": bounded(fmt.Sprintf("exit=%d vuln_oracle=%v touch_oracle=%v misfired=%v",
 				last.Exit, last.VulnOracle, last.TouchOracle, res.OracleMisfired), 2048),
 		},
@@ -451,6 +476,9 @@ func (ap *AgentProver) operatorRunOutcome(res *ProveResult, counters budget.Coun
 
 // operatorError 是非 run 失敗（transport／prove 例外／未提交）的回饋；格式同 §18.2。
 func (ap *AgentProver) operatorError(errMsg string) string {
+	if redaction.HasSecret(errMsg) {
+		errMsg = "[redacted: error 命中 secret pattern]"
+	}
 	doc := map[string]any{
 		"type": "run_outcome", "run_id": "", "kind": "", "exit": -1,
 		"oracle":        map[string]any{"result": false, "observed_summary": ""},
@@ -479,7 +507,11 @@ func (ap *AgentProver) hints(res *ProveResult) map[string]any {
 		{"sql_trace_tail", "sql_trace.jsonl", 2048},
 	} {
 		if data, err := readTail(art, spec.file, spec.max); err == nil && len(data) > 0 {
-			h[spec.key] = redactNonces(string(data), res.Runs)
+			v := redactNonces(string(data), res.Runs)
+			if redaction.HasSecret(v) {
+				v = "[redacted: secret pattern detected]"
+			}
+			h[spec.key] = v
 		}
 	}
 	return h

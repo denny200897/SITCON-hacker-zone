@@ -5,10 +5,10 @@
 package evidence
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,11 +16,13 @@ import (
 
 // Store 管理 <runDir>/evidence/ 目錄的 append-only 寫入。
 type Store struct {
-	mu     sync.Mutex
-	dir    string // <runDir>/evidence
-	prev   string // 前一筆 EV 自身 hash；空字串表示鏈首
-	count  int
+	mu    sync.Mutex
+	dir   string // <runDir>/evidence
+	prev  string // 前一筆 EV 自身 hash；空字串表示鏈首
+	count int
 }
+
+var evidenceIDPattern = regexp.MustCompile(`^EV-[0-9]{4}$`)
 
 // NewStore 開啟（或建立）runDir/evidence；重啟時從既有檔案回放鏈尾。
 func NewStore(runDir string) (*Store, error) {
@@ -43,6 +45,9 @@ func NewStore(runDir string) (*Store, error) {
 	}
 	sort.Strings(ids)
 	if len(ids) > 0 {
+		if err := VerifyChain(dir); err != nil {
+			return nil, fmt.Errorf("evidence: existing chain invalid: %w", err)
+		}
 		last := filepath.Join(dir, "EV-"+ids[len(ids)-1]+".json")
 		data, err := os.ReadFile(last)
 		if err != nil {
@@ -68,6 +73,9 @@ func NewStore(runDir string) (*Store, error) {
 func (s *Store) Write(doc map[string]any, id string) (string, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !evidenceIDPattern.MatchString(id) {
+		return "", "", fmt.Errorf("evidence: invalid id %q", id)
+	}
 	doc["id"] = id
 	doc["prev_evidence_hash"] = s.prev
 	if s.prev == "" {
@@ -77,20 +85,23 @@ func (s *Store) Write(doc map[string]any, id string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	data, err := json.Marshal(doc) // 僅落檔格式；hash 以 canonical 計
-	if err != nil {
-		return "", "", err
-	}
 	// 以 canonical JSON 落檔——bundle manifest 重算才會一致
 	cb, err := canonical(doc)
 	if err != nil {
 		return "", "", err
 	}
 	path := filepath.Join(s.dir, id+".json")
-	if err := os.WriteFile(path, append(cb, '\n'), 0o644); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
 		return "", "", fmt.Errorf("evidence: write %s: %w", path, err)
 	}
-	_ = data
+	if _, err := f.Write(append(cb, '\n')); err != nil {
+		_ = f.Close()
+		return "", "", fmt.Errorf("evidence: write %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return "", "", fmt.Errorf("evidence: close %s: %w", path, err)
+	}
 	s.prev = h
 	s.count++
 	return id, h, nil

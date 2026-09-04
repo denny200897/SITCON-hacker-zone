@@ -21,6 +21,7 @@ Trace entry 欄位閉集（§17.3）：{"ts", "sql", "params", "error", "rows"}�
 """
 import json
 import os
+import socket
 import sqlite3
 import threading
 import time
@@ -107,6 +108,72 @@ class TracedConnection(sqlite3.Connection):
 
 
 def install():
+    observer_addr = os.environ.get("AEGIS_OBSERVER_ADDR", "")
+    if observer_addr:
+        host, port = observer_addr.rsplit(":", 1)
+        port = int(port)
+
+        class ProxyCursor:
+            def __init__(self, result):
+                self._rows = result.get("rows", [])
+                self._index = 0
+
+            def fetchall(self):
+                out = self._rows[self._index:]
+                self._index = len(self._rows)
+                return [tuple(row) for row in out]
+
+            def fetchone(self):
+                if self._index >= len(self._rows):
+                    return None
+                row = tuple(self._rows[self._index])
+                self._index += 1
+                return row
+
+        class ProxyConnection:
+            def __init__(self):
+                self._closed = False
+
+            def _request(self, sql, params=()):
+                req = json.dumps({"op": "execute", "sql": sql,
+                                  "params": list(params) if isinstance(params, (tuple, list)) else []})
+                with socket.create_connection((host, port), timeout=10) as sock:
+                    sock.sendall((req + "\n").encode("utf-8"))
+                    data = b""
+                    while not data.endswith(b"\n"):
+                        chunk = sock.recv(65536)
+                        if not chunk:
+                            break
+                        data += chunk
+                result = json.loads(data.decode("utf-8"))
+                if not result.get("ok"):
+                    raise sqlite3.DatabaseError(result.get("error", "observer error"))
+                return result
+
+            def execute(self, sql, params=()):
+                return ProxyCursor(self._request(sql, params))
+
+            def executemany(self, sql, seq):
+                last = ProxyCursor({"rows": []})
+                for params in seq:
+                    last = self.execute(sql, params)
+                return last
+
+            def commit(self):
+                return None
+
+            def rollback(self):
+                return None
+
+            def close(self):
+                self._closed = True
+
+            def cursor(self, *args, **kwargs):
+                return self
+
+        sqlite3.connect = lambda database, *args, **kwargs: ProxyConnection()
+        return
+
     original_connect = sqlite3.connect
 
     def connect(database, *args, **kwargs):

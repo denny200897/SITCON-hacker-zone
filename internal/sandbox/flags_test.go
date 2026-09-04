@@ -115,6 +115,20 @@ func TestReclaimHelperHardeningFlags(t *testing.T) {
 	}
 }
 
+func TestReclaimHelperTrustedObserverVolumeIsSeparate(t *testing.T) {
+	got, err := reclaimHelperArgsWithObserver("R-0001", "/host/run/R-0001", "/host/seccomp.json", digestImg("aegis/helper"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsPair(got, "-v", TrustedVolumePrefix+"R-0001:/trusted:ro") {
+		t.Fatalf("trusted volume 未以唯讀方式掛入 reclaim helper：%#v", got)
+	}
+	i := indexOf(got, digestImg("aegis/helper"))
+	if i < 0 || indexOf(got[i+1:], "sh") < 0 {
+		t.Fatalf("observer reclaim 必須以 helper 內固定複製命令合併兩個來源：%#v", got)
+	}
+}
+
 // containsFlag 斷言 flags 內存在單一 flag（無值）。
 func containsFlag(args []string, flag string) bool {
 	for _, a := range args {

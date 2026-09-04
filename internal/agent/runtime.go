@@ -42,6 +42,10 @@ type Runtime struct {
 	Adapter  llm.Adapter
 	Tools    *ToolRegistry
 	MaxTurns int
+	// StopOnAccepted prevents post-acceptance turns in production prover
+	// sessions. It is explicit so callers embedding Runtime can retain the
+	// ordinary tool-loop semantics for non-prover roles.
+	StopOnAccepted bool
 }
 
 // Run 執行 tool loop 至終態（非 tool_use 回應或 submit 被核可）。
@@ -84,6 +88,18 @@ func (rt *Runtime) Run(ctx context.Context, req llm.ChatRequest) (llm.Response, 
 				ToolResult: &llm.ToolResult{ID: block.ToolUse.ID, Content: out.Content, IsError: out.IsError},
 			})
 		}
+		// An accepted witness is terminal for this session. This prevents a
+		// response containing multiple submits, or a later turn, from replacing
+		// the first spec that passed the trust gate.
+		for _, result := range results {
+			if rt.StopOnAccepted && result.ToolResult != nil && result.ToolResult.Content == "accepted" {
+				history = append(history,
+					llm.Message{Role: "assistant", Content: resp.Content},
+					llm.Message{Role: "user", Content: results})
+				resp.StopReason = llm.StopEndTurn
+				return resp, history, nil
+			}
+		}
 		history = append(history,
 			llm.Message{Role: "assistant", Content: resp.Content},
 			llm.Message{Role: "user", Content: results})
@@ -93,7 +109,7 @@ func (rt *Runtime) Run(ctx context.Context, req llm.ChatRequest) (llm.Response, 
 }
 
 // NewToolDefs 由 schemas/tools.schema.json 的 definitions 組 ToolDef 集合
-//（真源在 schemas/；僅取該 role 白名單內的工具，§18.1）。
+// （真源在 schemas/；僅取該 role 白名單內的工具，§18.1）。
 // toolsSchemaBytes 是 tools.schema.json 的原始內容；由呼叫端載入（不得
 // struct-tag 生成，§23-11）。
 func NewToolDefs(role llm.Role, toolsSchema []byte, witnessSpecSchema []byte, descriptions map[string]string) ([]llm.ToolDef, error) {

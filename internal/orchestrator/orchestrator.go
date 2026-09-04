@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/aegis-dev/aegis/internal/evidence"
-	"github.com/aegis-dev/aegis/internal/orchestrator/policy"
 	"github.com/aegis-dev/aegis/internal/oracles"
+	"github.com/aegis-dev/aegis/internal/orchestrator/policy"
 	"github.com/aegis-dev/aegis/internal/packs"
 	"github.com/aegis-dev/aegis/internal/sandbox"
 )
@@ -44,15 +46,30 @@ func (a *packAdapter) Template(id string) (*policy.Template, error) {
 		return nil, fmt.Errorf("orchestrator: template %q: %w", id, err)
 	}
 	return &policy.Template{
-		TemplateID:   t.TemplateID,
-		Family:       t.Family,
-		RunMode:      t.RunMode,
-		AllowedFiles: t.AllowedFiles,
-		ServiceCmd:   t.ServiceCmd,
-		ServicePort:  t.ServicePort,
-		WaitFor:      t.WaitFor,
-		Image:        img,
+		TemplateID:    t.TemplateID,
+		Family:        t.Family,
+		RunMode:       t.RunMode,
+		AllowedFiles:  t.AllowedFiles,
+		ServiceCmd:    t.ServiceCmd,
+		ServicePort:   t.ServicePort,
+		WaitFor:       t.WaitFor,
+		Image:         img,
+		ObserverImage: a.observerImage(),
 	}, nil
+}
+
+func (a *packAdapter) observerImage() string {
+	if a.pack != nil && a.pack.Manifest != nil {
+		ref := a.pack.Manifest.Images["observer/sqlite"]
+		if ref == "" {
+			return ""
+		}
+		if resolved, err := a.resolveImage(ref); err == nil {
+			return resolved
+		}
+		return ref
+	}
+	return ""
 }
 
 func (a *packAdapter) Oracle(id string) (*policy.Oracle, error) {
@@ -110,7 +127,7 @@ func lookupImagesJSON(path, ref string) (string, bool) {
 }
 
 // RecordImage 把「映像參照名 → digest」寫入 ~/.cache/aegis/images.json
-//（§17.10 的本地記錄；由 /doctor 與 pack replay 測試在建置後呼叫）。
+// （§17.10 的本地記錄；由 /doctor 與 pack replay 測試在建置後呼叫）。
 func RecordImage(cachePath, ref, digest string) error {
 	if ref == "" || !isDigestImage(digest) {
 		return fmt.Errorf("orchestrator: RecordImage 參數非法（ref=%q digest=%q）", ref, digest)
@@ -156,46 +173,68 @@ func NewNonce() (string, error) {
 // 誠實邊界：這是文字層而非完整 AST；升級為 ast_helper（pack capabilities）時
 // 保留同簽名替換（M0c），呼叫端契約不變。
 func ASTCheck(snapshotDir, targetSymbol string) error {
-	if snapshotDir == "" {
-		return fmt.Errorf("orchestrator: ASTCheck 的 snapshotDir 為空")
+	if snapshotDir == "" || targetSymbol == "" {
+		return fmt.Errorf("orchestrator: ASTCheck 輸入不可為空")
 	}
-	if targetSymbol == "" {
-		return fmt.Errorf("orchestrator: ASTCheck 的 targetSymbol 為空")
-	}
-	segs := strings.Split(targetSymbol, ".")
-	for _, s := range segs {
-		if s == "" {
-			return fmt.Errorf("orchestrator: targetSymbol 含空段：%q", targetSymbol)
+	for _, seg := range strings.Split(targetSymbol, ".") {
+		if !isPythonIdentifier(seg) {
+			return fmt.Errorf("orchestrator: targetSymbol 含非法符號：%q", targetSymbol)
 		}
 	}
-	modulePath := filepath.Join(snapshotDir, filepath.FromSlash(strings.Join(segs[:1], "/"))+".py")
-	// module 段允許 package 形式（pkg/mod.py）；v1 先解析頂層 module 檔。
-	if _, err := os.Stat(modulePath); err != nil {
-		return fmt.Errorf("orchestrator: module %q 在 snapshot 中不存在", segs[0])
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return fmt.Errorf("orchestrator: 無法定位 AST helper")
 	}
-	data, err := os.ReadFile(modulePath)
+	helper := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "packs", "python-web", "ast_helper", "ast_check.py"))
+	if _, err := os.Stat(helper); err != nil {
+		return fmt.Errorf("orchestrator: AST helper 不存在：%w", err)
+	}
+	f, err := os.CreateTemp("", "aegis-ast-*.json")
 	if err != nil {
-		return fmt.Errorf("orchestrator: 讀取 %s: %w", modulePath, err)
+		return fmt.Errorf("orchestrator: 建立 AST artifact：%w", err)
 	}
-	text := string(data)
-	for _, seg := range segs[1:] {
-		patterns := []string{
-			"class " + seg,
-			"def " + seg,
-			seg + " =",
+	out := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(out)
+		return err
+	}
+	defer os.Remove(out)
+	cmd := exec.Command("python3", helper, "--root", snapshotDir, "--symbol", targetSymbol, "--out", out)
+	if err := cmd.Run(); err != nil {
+		data, _ := os.ReadFile(out)
+		var v struct {
+			Detail string `json:"detail"`
 		}
-		found := false
-		for _, p := range patterns {
-			if strings.Contains(text, p) {
-				found = true
-				break
-			}
+		_ = json.Unmarshal(data, &v)
+		if v.Detail != "" {
+			return fmt.Errorf("orchestrator: ASTCheck 拒絕：%s", v.Detail)
 		}
-		if !found {
-			return fmt.Errorf("orchestrator: 符號 %q 在 module %q 中未靜態解析到", seg, segs[0])
+		return fmt.Errorf("orchestrator: AST helper 失敗：%w", err)
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		return fmt.Errorf("orchestrator: 讀取 AST artifact：%w", err)
+	}
+	var v struct {
+		OK     bool   `json:"ok"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil || !v.OK {
+		if v.Detail == "" {
+			v.Detail = "符號不存在"
 		}
+		return fmt.Errorf("orchestrator: ASTCheck 拒絕：%s", v.Detail)
 	}
 	return nil
+}
+
+func isPythonIdentifier(s string) bool {
+	for i, r := range s {
+		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || i > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // ---- RunRequest → RunSpec（orchestrator 只翻譯、不決策；§23-2） ----
@@ -246,15 +285,25 @@ func RunRequestToRunSpec(rr map[string]any, snapshotID, seccompPath, snapshotDir
 		return sandbox.RunSpec{}, err
 	}
 	return sandbox.RunSpec{
-		RunID:      runID,
-		SnapshotID: snapshotID,
-		Image:      image,
-		Cmd:        cmd,
-		Network:    network,
-		Seccomp:    seccompPath,
-		TimeoutSec: n,
-		Env:        env,
+		RunID:         runID,
+		SnapshotID:    snapshotID,
+		Image:         image,
+		Cmd:           cmd,
+		Network:       network,
+		Seccomp:       seccompPath,
+		TimeoutSec:    n,
+		Env:           env,
+		ObserverImage: observerImage(rr),
 	}, nil
+}
+
+func observerImage(rr map[string]any) string {
+	if raw, ok := rr["observer"].(map[string]any); ok {
+		if image, ok := raw["image"].(string); ok {
+			return image
+		}
+	}
+	return ""
 }
 
 // reqInt 取 RunRequest 的整數欄位（json.Number 或 int64）。
@@ -284,6 +333,9 @@ func ServiceEnv(rr map[string]any) ([]string, error) {
 		return nil, fmt.Errorf("orchestrator: RunRequest.service.cmd 缺值")
 	}
 	env := []string{"AEGIS_SERVICE_CMD=" + cmd}
+	if observer := observerAddress(rr); observer != "" {
+		env = append(env, "AEGIS_OBSERVER_ADDR="+observer)
+	}
 	if p, err := svcInt(svc, "port"); err == nil && p > 0 {
 		env = append(env, fmt.Sprintf("AEGIS_SERVICE_PORT=%d", p))
 	}
@@ -294,6 +346,15 @@ func ServiceEnv(rr map[string]any) ([]string, error) {
 		}
 	}
 	return env, nil
+}
+
+func observerAddress(rr map[string]any) string {
+	if raw, ok := rr["observer"].(map[string]any); ok {
+		if address, ok := raw["address"].(string); ok {
+			return address
+		}
+	}
+	return ""
 }
 
 // svcInt 取 service 子物件的整數欄位。

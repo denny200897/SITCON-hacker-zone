@@ -13,6 +13,10 @@
     "stdout_tail": {"type": "string"},
     "stderr_tail": {"type": "string"},
     "artifacts": {"type": "array", "items": {"type": "string"}},
+    "artifact_hashes": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+    },
     "fs_diff": {
       "type": "object",
       "required": ["added", "modified"],

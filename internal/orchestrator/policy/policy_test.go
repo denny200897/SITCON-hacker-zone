@@ -259,6 +259,24 @@ func TestCompileHappyPath(t *testing.T) {
 	validateRunRequest(t, rr)
 }
 
+func TestObserverSidecarChangesOnlyPolicyNetwork(t *testing.T) {
+	spec := baseSpec()
+	in := compileInput(spec, nil)
+	in.PackView.(*stubPack).templates["py/http-endpoint/v3"].ObserverImage = "aegis-observer@sha256:" + strings.Repeat("cd", 32)
+	rr, err := Compile(in, testNonce)
+	if err != nil {
+		t.Fatalf("observer policy compile 失敗：%v", err)
+	}
+	if rr["network"] != "ssrf-internal" {
+		t.Fatalf("observer 啟用時 network 應為 ssrf-internal：%v", rr["network"])
+	}
+	obs, ok := rr["observer"].(map[string]any)
+	if !ok || obs["address"] != "observer:8787" {
+		t.Fatalf("observer metadata 不符：%#v", rr["observer"])
+	}
+	validateRunRequest(t, rr)
+}
+
 // validateRunRequest 以 internal/schemav 對 schemas/run_request.schema.json 驗證。
 func validateRunRequest(t *testing.T, rr map[string]any) {
 	t.Helper()

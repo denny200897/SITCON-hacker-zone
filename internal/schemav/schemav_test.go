@@ -42,7 +42,7 @@ func TestLoadDirAndValidate(t *testing.T) {
 	}
 
 	// 可變 tag 映像拒絕（run_request.image 只收 digest）
-	img := `{"run_id":"R-0001","kind":"exploit","image":"aegis-python-web:3.12","files":{},
+	img := `{"run_id":"R-0001","kind":"exploit","oracle_id":"sqli.error/v1","image":"aegis-python-web:3.12","files":{},
 	  "mounts":[],"cmd":["/aegis/entrypoint.py"],"network":"none","nonce":"n","timeout_sec":60,
 	  "caps":{"cpus":"1","mem":"512m","pids":128,"cap_drop":"ALL","no_new_privileges":true,"rootfs":"ro"}}`
 	if err := r.Validate("run_request", []byte(img)); err == nil {

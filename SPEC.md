@@ -992,26 +992,26 @@ func canonical(v any) ([]byte, error) {
 ## 22. 里程碑驗收標準（逐項打勾才准進下一個）
 
 **M0a（Trust Kernel，零 LLM）**
-- [ ] 手寫 WitnessSpec ＋固定 fixture 能走完：policy compiler → sandbox build/run → checker → evidence 落檔（全程無 LLM 呼叫）。
-- [ ] hardening 每條 flag 有 unit test（`docker inspect` 驗證 cap_drop／ro rootfs／no-new-privileges／non-root 生效）。
-- [ ] adversarial tests：digest 不符映像、可變 tag、`..` 路徑、絕對路徑 generated_files、超大 generated_files（>256KiB）各被擋下。
-- [ ] `schemas/` 11 個檔案存在且相互驗證通過（contracts tests）。
-- [ ] canonical JSON（§21.4）：同物件兩次序列化輸出 byte 相等；非 ASCII 鍵排序、`json.Number` round-trip、`<`／`&` 不轉義、輸出無尾換行的 fixture 測試各一；對 struct 直接 canonical hash 的路徑不存在。
+- [x] 手寫 WitnessSpec ＋固定 fixture 能走完：policy compiler → sandbox build/run → checker → evidence 落檔（全程無 LLM 呼叫）。
+- [x] hardening 每條 flag 有 unit test（`docker inspect` 驗證 cap_drop／ro rootfs／no-new-privileges／non-root 生效）。
+- [x] adversarial tests：digest 不符映像、可變 tag、`..` 路徑、絕對路徑 generated_files、超大 generated_files（>256KiB）各被擋下。
+- [x] `schemas/` 11 個檔案存在且相互驗證通過（contracts tests）。
+- [x] canonical JSON（§21.4）：同物件兩次序列化輸出 byte 相等；非 ASCII 鍵排序、`json.Number` round-trip、`<`／`&` 不轉義、輸出無尾換行的 fixture 測試各一；對 struct 直接 canonical hash 的路徑不存在。
 
 **M0b（決定性 SQLi E2E）**
-- [ ] `fixtures/vuln-sqli-001`：Flask + sqlite，`UserRepo.find_by_name` 以 f-string 拼接；negative／positive／exploit 三 run 分離落 evidence。
-- [ ] exploit 以 `{{NONCE}}'`（error-based breakout）使 `sqli.error/v1` = true；negative（`alice-{{NONCE}}`，無跳脫字元）漏洞 oracle = false；positive 使 `sink.touch.sql/v1` = true。
-- [ ] replay：整 bundle 重跑兩次，oracle 判定一致、evidence hash 一致。
-- [ ] 偽造測試：把 exploit 改成直接 `print` nonce 字串 → oracle 必須仍為 false（stdout 不算證據）。
+- [x] `fixtures/vuln-sqli-001`：Flask + sqlite，`UserRepo.find_by_name` 以 f-string 拼接；negative／positive／exploit 三 run 分離落 evidence。
+- [x] exploit 以 `{{NONCE}}'`（error-based breakout）使 `sqli.error/v1` = true；negative（`alice-{{NONCE}}`，無跳脫字元）漏洞 oracle = false；positive 使 `sink.touch.sql/v1` = true。
+- [x] replay：整 bundle 重跑兩次，oracle 判定一致、evidence hash 一致。
+- [x] 偽造測試：把 exploit 改成直接 `print` nonce 字串 → oracle 必須仍為 false（stdout 不算證據）。
 
 **M0c（Agent 整合）**
-- [ ] prover（單供應商）以 tool loop 對同一 fixture 產 WitnessSpec，全 pipeline 走到 PROVEN。
-- [ ] 失敗分類計數器各有測試：env 用盡 → `ENV_ERROR`；3 假設全數否證 → `HYPOTHESIS_REJECTED`（scope 與 rationale 落檔）；振盪與 harness 用盡 → `NOT_PROVEN`（各含完整嘗試日誌）。
-- [ ] 拒絕路徑測試：prover 重送同 hash spec 被拒、缺三行 preamble 被拒、缺 `{{NONCE}}` 被拒。
+- [x] prover（單供應商）以 tool loop 對同一 fixture 產 WitnessSpec，全 pipeline 走到 PROVEN。
+- [x] 失敗分類計數器各有測試：env 用盡 → `ENV_ERROR`；3 假設全數否證 → `HYPOTHESIS_REJECTED`（scope 與 rationale 落檔）；振盪與 harness 用盡 → `NOT_PROVEN`（各含完整嘗試日誌）。
+- [x] 拒絕路徑測試：prover 重送同 hash spec 被拒、缺三行 preamble 被拒、缺 `{{NONCE}}` 被拒。
 
 **M0d（產品外殼）**
-- [ ] 互動模式全部 slash 指令（§3.3 表列 10 條）可用；`/doctor` 驗 Docker、映像本地構建＋digest 記錄（§17.10）、provider 連通。
-- [ ] keychain 寫入／刪除、credentials.toml 退回（0600＋警告）、落盤前 redaction 各有測試。
+- [x] 互動模式全部 slash 指令（§3.3 表列 10 條）可用；`/doctor` 驗 Docker、映像本地構建＋digest 記錄（§17.10）、provider 連通。
+- [x] keychain 寫入／刪除、credentials.toml 退回（0600＋警告）、落盤前 redaction 各有測試。
 
 ---
 

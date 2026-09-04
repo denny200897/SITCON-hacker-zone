@@ -25,6 +25,18 @@ func requireDocker(t *testing.T) *Runner {
 	return r
 }
 
+// TestCreateRejectsUnknownDigest covers the adversarial case that a reference
+// is syntactically a digest but does not identify an image available to the
+// daemon.  A valid-looking digest must never be silently replaced by a tag or
+// local image.
+func TestCreateRejectsUnknownDigest(t *testing.T) {
+	r := requireDocker(t)
+	bogus := "alpine@sha256:" + strings.Repeat("0", 64)
+	if _, err := r.Create([]string{"--pull=never", bogus, "true"}); err == nil {
+		t.Fatal("docker create accepted an unavailable digest")
+	}
+}
+
 // busyboxDigestRef 取得 busybox 的 digest 引用（"busybox@sha256:…"）；映像不存在則先
 // pull（§22：以 digest 記錄）。取不到 RepoDigest（如本機構建映像）即 skip。
 func busyboxDigestRef(t *testing.T, r *Runner) string {
@@ -336,7 +348,7 @@ func TestSandboxCopyInAndRun(t *testing.T) {
 
 	args, err := DockerArgs(RunSpec{
 		RunID: runID, SnapshotID: "SNAP-9903", Image: img,
-		Cmd: []string{"grep", "-q", "AEGIS_TEST_NONCE", OutMountPoint + "/payload.txt"},
+		Cmd:     []string{"grep", "-q", "AEGIS_TEST_NONCE", OutMountPoint + "/payload.txt"},
 		Network: NetworkNone, Seccomp: testSeccompFile(t), TimeoutSec: 30,
 	}, snapDir)
 	if err != nil {
@@ -371,7 +383,7 @@ func TestSandboxDiffIgnoresMounts(t *testing.T) {
 
 	args, err := DockerArgs(RunSpec{
 		RunID: runID, SnapshotID: "SNAP-9904", Image: img,
-		Cmd: []string{"sh", "-c", "echo a > /tmp/x && echo b > /aegis/out/observer.jsonl"},
+		Cmd:     []string{"sh", "-c", "echo a > /tmp/x && echo b > /aegis/out/observer.jsonl"},
 		Network: NetworkNone, Seccomp: testSeccompFile(t), TimeoutSec: 30,
 	}, snapDir)
 	if err != nil {
@@ -412,7 +424,7 @@ func TestSandboxReclaim(t *testing.T) {
 
 	args, err := DockerArgs(RunSpec{
 		RunID: runID, SnapshotID: "SNAP-9905", Image: img,
-		Cmd: []string{"sh", "-c", "echo artifact > /aegis/out/observer.jsonl"},
+		Cmd:     []string{"sh", "-c", "echo artifact > /aegis/out/observer.jsonl"},
 		Network: NetworkNone, Seccomp: testSeccompFile(t), TimeoutSec: 30,
 	}, snapDir)
 	if err != nil {

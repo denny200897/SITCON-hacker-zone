@@ -79,7 +79,7 @@ func assertNone(t *testing.T, out string, want ...string) {
 }
 
 // secretFeeder 回傳一個依序吐出預設金鑰的 injected ReadSecret
-//（§3.3 /key set 的 no-echo 輸入由 cmd 層接線，測試以佇列替代）。
+// （§3.3 /key set 的 no-echo 輸入由 cmd 層接線，測試以佇列替代）。
 // 佇列耗盡時讓測試失敗——表示腳本與指令序列不吻合。
 func secretFeeder(t *testing.T, keys ...string) func(string) ([]byte, error) {
 	t.Helper()
@@ -103,7 +103,7 @@ func writeRepoConfig(t *testing.T, path, content string) {
 }
 
 // providerRoundtrip：/provider add → list → remove 全循環；list 永不包含金鑰內容
-//（§3.3：只顯示有無）。
+// （§3.3：只顯示有無）。
 func TestProviderAddListRemoveRoundtrip(t *testing.T) {
 	d, _, _ := newDeps(t)
 	run(t, d, "/provider add p1\nanthropic\n\n/provider add p2\nopenai-compat\nhttps://api.example.com/v1\n\n")
@@ -190,8 +190,13 @@ recon = "anthropic/claude-recon"
 	if len(user.Models) != 0 {
 		t.Fatalf("reset 後使用者層 Models 應為空: %v", user.Models)
 	}
-	if _, ok := user.Providers["anthropic"]; !ok {
-		t.Fatalf("reset 不應動到使用者層供應商定義: %v", user.Providers)
+	// anthropic is repo-owned in this fixture; reset must not copy or remove it.
+	repo, err := settings.Load(d.RepoConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := repo.Providers["anthropic"]; !ok {
+		t.Fatalf("reset 不應動到 repo 層供應商定義: %v", repo.Providers)
 	}
 }
 
@@ -260,7 +265,7 @@ func TestExitOnExit(t *testing.T) {
 }
 
 // writeGuardRefusesLeakedKey：§23-6 金鑰防洩 guard——已登錄金鑰出現在待寫設定
-//（此處：fake key 被貼進 provider base_url）時必須拒寫並輸出錯誤；
+// （此處：fake key 被貼進 provider base_url）時必須拒寫並輸出錯誤；
 // settings.toml 不得被寫出。
 func TestWriteGuardRefusesLeakedKey(t *testing.T) {
 	d, _, kr := newDeps(t)

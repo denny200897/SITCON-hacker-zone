@@ -3,26 +3,31 @@
 // 失敗分類全走 budget.Classify（§19 決策樹），停止權在 orchestrator（§9.3）。
 //
 // 誠實邊界（ADR 0002）：M0b 決定性 harness 無自我修正能力，呼叫端以單次預算
-//（MaxEnv=MaxHarness=MaxHypotheses=1）驅動——任一失敗即終態：
+// （MaxEnv=MaxHarness=MaxHypotheses=1）驅動——任一失敗即終態：
 // env → ENV_ERROR、harness → NOT_PROVEN(harness_budget)、controlled_miss →
 // HYPOTHESIS_REJECTED。重試與假設迭代由 M0c agent 迴圈承接（多假設預算）。
 package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/aegis-dev/aegis/internal/domain"
 	"github.com/aegis-dev/aegis/internal/evidence"
 	"github.com/aegis-dev/aegis/internal/journal"
+	"github.com/aegis-dev/aegis/internal/oracles"
 	"github.com/aegis-dev/aegis/internal/orchestrator/budget"
 	"github.com/aegis-dev/aegis/internal/orchestrator/policy"
-	"github.com/aegis-dev/aegis/internal/oracles"
 	"github.com/aegis-dev/aegis/internal/packs"
 	"github.com/aegis-dev/aegis/internal/redaction"
 	"github.com/aegis-dev/aegis/internal/sandbox"
+	"github.com/aegis-dev/aegis/internal/schemav"
 )
 
 // Prover 是一次證明工作的執行器（三控制 run；§5.2）。
@@ -38,6 +43,12 @@ type Prover struct {
 	RunDir      string // <runDir>；evidence/ 與 evidence/runs/ 於其下
 
 	CachePath string // ~/.cache/aegis/images.json（映像解析 §17.10；可空）
+	// Metadata is captured in every evidence manifest. Callers may provide the
+	// snapshot tree hash; the deterministic fallback keeps the contract valid
+	// for older integrations that only have SnapshotID.
+	RepoTreeHash  string
+	RunnerVersion string
+	PromptVersion string
 
 	Budget         budget.Budget
 	PrevSpecHashes map[string]bool
@@ -200,7 +211,7 @@ func (p *Prover) runOne(ctx context.Context, seccomp string, in ProveInput, kind
 		}
 	}
 
-	_, evID, exit, rerr := p.executeRun(ctx, seccomp, rr, nonce, in.FindingID, string(kind))
+	_, evID, exit, rerr := p.executeRun(ctx, seccomp, rr, nonce, in, string(kind))
 	rec := &RunRecord{RunID: runID, Kind: kind, Exit: exit, Nonce: nonce, EvidenceID: evID}
 
 	// 執行層錯誤（docker/reclaim 等）：歸 env，扣預算（§19 第 1 點）。
@@ -252,7 +263,8 @@ func (p *Prover) runOne(ctx context.Context, seccomp string, in ProveInput, kind
 // start → reclaim。注入走 per-run witness volume（ADR 0002；docker 29 對
 // --read-only rootfs 的 docker cp 限制）。產物落 <RunDir>/evidence/runs/<runID>/，
 // 並寫 run_result EV。回傳 (artifacts 目錄, evidence id, exit code, 執行層錯誤)。
-func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]any, nonce, findingID, kind string) (artDir, evID string, exit int, retErr error) {
+func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]any, nonce string, in ProveInput, kind string) (artDir, evID string, exit int, retErr error) {
+	findingID := in.FindingID
 	runID, err := reqStr(rr, "run_id")
 	if err != nil {
 		return "", "", 0, err
@@ -293,6 +305,19 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if err != nil {
 		return "", "", 0, err
 	}
+	if spec.ObserverImage != "" {
+		// The observer owns the per-run internal network and must be alive before
+		// the witness is created/started; otherwise service startup can race a
+		// missing observer DNS endpoint and produce no trusted trace.
+		if err := p.Runner.StartObserver(ctx, runID, spec.ObserverImage, seccomp); err != nil {
+			return "", "", 0, err
+		}
+		defer func() {
+			if retErr != nil {
+				_ = p.Runner.StopObserver(runID)
+			}
+		}()
+	}
 	args, err := sandbox.DockerArgs(spec, p.SnapshotDir)
 	if err != nil {
 		return "", "", 0, err
@@ -319,7 +344,7 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		return "", "", exit, err
 	}
 	// Reclaim 套與 run 容器同一份 seccomp／hardening（§17.6-2、§23-8；P2-2）。
-	if rerr := p.Runner.Reclaim(ctx, cid, runID, artDir, seccomp); rerr != nil {
+	if rerr := p.Runner.ReclaimWithObserver(ctx, cid, runID, artDir, seccomp, spec.ObserverImage != ""); rerr != nil {
 		return "", "", exit, fmt.Errorf("orchestrator: reclaim %s: %w", runID, rerr)
 	}
 
@@ -328,18 +353,46 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if err != nil {
 		return "", evID, exit, err
 	}
+	requestHash, err := evidence.Hash(rr)
+	if err != nil {
+		return "", evID, exit, fmt.Errorf("orchestrator: hash run request: %w", err)
+	}
+	artifacts := []string{}
+	artifactHashes := map[string]any{}
+	if ents, rerr := os.ReadDir(artDir); rerr == nil {
+		for _, ent := range ents {
+			if ent.IsDir() {
+				continue
+			}
+			artifacts = append(artifacts, ent.Name())
+			if b, herr := os.ReadFile(filepath.Join(artDir, ent.Name())); herr == nil {
+				h := sha256.Sum256(b)
+				artifactHashes[ent.Name()] = "sha256:" + hex.EncodeToString(h[:])
+			}
+		}
+	}
+	// stdout/stderr are intentionally informational only. The checker reads
+	// observer artifacts; neither stream can establish a positive result.
+	vulnResult, vulnErr := p.checkOracle(in, kind, runID, nonce, "vuln")
+	touchResult, touchErr := p.checkOracle(in, kind, runID, nonce, "touch")
+	if vulnErr != nil || touchErr != nil {
+		return "", "", exit, fmt.Errorf("orchestrator: checker: vuln=%v touch=%v", vulnErr, touchErr)
+	}
 	doc := map[string]any{
-		"kind":           "run_result",
-		"run_id":         runID,
-		"kind_label":     kind,
-		"finding_id":     findingID,
+		"id": evID, "kind": kind, "finding_id": findingID, "run_id": runID,
+		"snapshot_id": p.SnapshotID, "repo_tree_hash": p.repoTreeHash(),
 		"image":          strField(rr, "image"),
-		"exit_code":      int64(exit),
-		"nonce":          nonce,
-		"artifacts_dir":  filepath.ToSlash(artDir),
-		"schema_version": domain.SchemasVersion,
-		"generated_by":   "orchestrator",
-		"snapshot_id":    p.SnapshotID,
+		"pack":           map[string]any{"id": p.Pack.Manifest.PackID, "version": p.Pack.Manifest.Version, "abi": int64(p.Pack.Manifest.SchemaVersion)},
+		"runner_version": p.runnerVersion(), "prompt_version": p.promptVersion(), "schemas_version": domain.SchemasVersion,
+		"run_request_hash": requestHash,
+		"run_result": map[string]any{"run_id": runID, "exit": int64(exit), "stdout": "", "stderr": "", "artifacts": artifacts, "artifact_hashes": artifactHashes,
+			"fs_diff": map[string]any{"added": []any{}, "modified": []any{}}},
+		"oracle": map[string]any{"oracle_id": strField(rr, "oracle_id"), "nonce": nonce, "nonce_observed": true, "result": vulnResult,
+			"touch": map[string]any{"oracle_id": touchOracleID(p.Pack, strField(rr, "oracle_id")), "result": touchResult}},
+		"created_by": "orchestrator", "verified_by": "checker",
+	}
+	if err := validateEvidenceDocument(doc); err != nil {
+		return "", evID, exit, err
 	}
 	if _, _, werr := p.Store.Write(doc, evID); werr != nil {
 		return "", evID, exit, fmt.Errorf("orchestrator: 寫 evidence %s: %w", evID, werr)
@@ -355,6 +408,58 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		return "", evID, exit, err
 	}
 	return artDir, evID, exit, nil
+}
+
+func validateEvidenceDocument(doc map[string]any) error {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return fmt.Errorf("orchestrator: 無法定位 schemas")
+	}
+	schemasDir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "schemas"))
+	reg := schemav.New()
+	if err := reg.LoadDir(schemasDir); err != nil {
+		return fmt.Errorf("orchestrator: 載入 evidence schema: %w", err)
+	}
+	b, err := evidence.CanonicalBytes(doc)
+	if err != nil {
+		return fmt.Errorf("orchestrator: encode evidence: %w", err)
+	}
+	if err := reg.Validate("evidence", b); err != nil {
+		return fmt.Errorf("orchestrator: evidence schema rejected: %w", err)
+	}
+	return nil
+}
+
+func touchOracleID(pack *packs.Pack, vulnID string) string {
+	if pack != nil {
+		if o, err := pack.Oracle(vulnID); err == nil && o.Touch != nil {
+			return *o.Touch
+		}
+	}
+	return ""
+}
+
+func (p *Prover) repoTreeHash() string {
+	if strings.HasPrefix(p.RepoTreeHash, "sha256:") {
+		return p.RepoTreeHash
+	}
+	return digestText(p.SnapshotID)
+}
+func (p *Prover) runnerVersion() string {
+	if p.RunnerVersion != "" {
+		return p.RunnerVersion
+	}
+	return "aegis/1"
+}
+func (p *Prover) promptVersion() string {
+	if p.PromptVersion != "" {
+		return p.PromptVersion
+	}
+	return "v1"
+}
+func digestText(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return "sha256:" + hex.EncodeToString(h[:])
 }
 
 // checkOracle 以 pack 的 vuln／touch rule 判定收回的 artifacts。

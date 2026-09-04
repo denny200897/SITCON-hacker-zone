@@ -100,6 +100,11 @@ func newAgentProver(t *testing.T, ad llm.Adapter, prove ProveFunc, b budget.Budg
 		t.Fatal(err)
 	}
 	tools := &agent.ToolRegistry{SnapshotDir: t.TempDir()}
+	audit, err := agent.OpenAuditLog(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools.SetAudit(audit)
 	ap := &AgentProver{
 		Prove: prove, Journal: j, Adapter: ad, Tools: tools,
 		Model: "test-model", System: "sys",
@@ -107,8 +112,9 @@ func newAgentProver(t *testing.T, ad llm.Adapter, prove ProveFunc, b budget.Budg
 			TargetSymbol: "query_user", OracleID: "sqli.error/v1", SnapshotID: "S-0001",
 			Context: "def query_user(u):\n    return db.execute('SELECT * FROM u WHERE n=' + u)"},
 		Budget: b, RunDir: dir,
+		ValidateSpec: func(map[string]any) error { return nil },
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close(); _ = audit.Close() })
 	return ap, j
 }
 
@@ -472,7 +478,7 @@ func TestOperatorFeedbackBounded(t *testing.T) {
 	}, budget.Default())
 	res := &ProveResult{Verification: domain.VerificationHypothesisRej,
 		FailureClass: domain.FailureControlledMiss,
-		Runs: []RunRecord{{RunID: "R-9", Kind: "exploit", Exit: 0, Nonce: "SECRETNONCE123"}}}
+		Runs:         []RunRecord{{RunID: "R-9", Kind: "exploit", Exit: 0, Nonce: "SECRETNONCE123"}}}
 	// 假 artifacts 含 nonce 與超長內容。
 	dir := filepath.Join(ap.RunDir, "evidence", "runs", "R-9")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

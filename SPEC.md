@@ -1,4 +1,4 @@
-# SPEC — Hacker Zone（`hz`）：程式碼資安審查 Agent Harness
+# SPEC — Aegis：程式碼資安審查 Agent Harness
 
 > 定位一句話：**一個會自己「蓋出犯罪現場」的程式碼資安審查工具** —— 當模型發現程式碼有問題、但目前還沒有外部可達的攻擊鏈時，它會建構一個最小的假想產品 MVP，把該段程式碼接上攻擊面、在沙箱裡實際打穿它來證明漏洞確實存在，然後告訴開發者：（1）未來開發時注意什麼，讓這個漏洞永遠長不出攻擊鏈；（2）現在應該怎麼修。
 
@@ -29,7 +29,7 @@
 
 | 決策點 | 選擇 |
 |--------|------|
-| 產品形態 | 獨立 CLI（`hz scan / prove / report`；triage 併入 scan 階段） |
+| 產品形態 | 獨立 CLI（`aegis scan / prove / report`；triage 併入 scan 階段） |
 | 候選來源 | semgrep（高精度候選）+ LLM 獨立自由審查，merge/dedup |
 | 漏洞類別 | Injection 家族、SSRF／出網請求、存取控制／認證、XSS／輸出注入（四類全做，依里程碑分波上線） |
 | 語言 | v1 第一包：**Python web**（FastAPI / Flask / Django）；其他語言走 sink pack 擴充介面 |
@@ -105,7 +105,7 @@ ACD 是 `severity` 的主要輸入之一，但**不是唯一**：severity 由確
 ## 3. 系統架構
 
 ```
-hz CLI（外殼：scan / triage / prove / report）
+aegis CLI（外殼：scan / prove / report）
    │
    ▼
 Orchestrator（確定性狀態機：階段推進、預算、斷點續掃、並行調度）
@@ -137,7 +137,7 @@ Orchestrator（確定性狀態機：階段推進、預算、斷點續掃、並�
 
 ### 3.1 LLM 層設計
 
-**模型路由**：**沒有任何內建預設**。工具不預先綁定供應商，每個角色的模型由使用者以 `<provider>/<model-id>` 自行指定，解析序：repo `hz.toml` > 使用者層級設定（互動模式 `/model set` 寫入處）> 無；任一角色未定義即拒絕執行並提示設定方式。設計原則是**成本分層**：機械性工作用便宜模型、攻擊鏈證明用最強模型。下表為「使用者採用 Anthropic 時」的推薦配置**範例**（非預設，僅供參考）：
+**模型路由**：**沒有任何內建預設**。工具不預先綁定供應商，每個角色的模型由使用者以 `<provider>/<model-id>` 自行指定，解析序：repo `aegis.toml` > 使用者層級設定（互動模式 `/model set` 寫入處）> 無；任一角色未定義即拒絕執行並提示設定方式。設計原則是**成本分層**：機械性工作用便宜模型、攻擊鏈證明用最強模型。下表為「使用者採用 Anthropic 時」的推薦配置**範例**（非預設，僅供參考）：
 
 | 角色 | 建議模型（範例） | 理由 |
 |------|----------|------|
@@ -194,9 +194,9 @@ LLMAdapter.chat(role, messages, tools, output_schema?, thinking?, stream?) -> Re
 
 ### 3.3 憑證管理與互動模式（slash 指令）
 
-**進入方式**：無參數執行 `hz`（或 `hz console`）進入互動模式；slash 指令僅存在於此模式。**不提供一次性設定子命令**（如 `hz login …`）——設定一律在互動模式完成；腳本／CI 場景以環境變數 + `hz.toml` 替代。
+**進入方式**：無參數執行 `aegis`（或 `aegis console`）進入互動模式；slash 指令僅存在於此模式。**不提供一次性設定子命令**（如 `aegis login …`）——設定一律在互動模式完成；腳本／CI 場景以環境變數 + `aegis.toml` 替代。
 
-**首次執行**：沒有內建供應商、金鑰與模型路由。任何一項缺漏時不會以預設值繼續，而是提示依序完成 `/provider add` → `/key set` → `/model set`（非互動場景對應環境變數 + `hz.toml`）。
+**首次執行**：沒有內建供應商、金鑰與模型路由。任何一項缺漏時不會以預設值繼續，而是提示依序完成 `/provider add` → `/key set` → `/model set`（非互動場景對應環境變數 + `aegis.toml`）。
 
 | 指令 | 作用 |
 |------|------|
@@ -205,15 +205,15 @@ LLMAdapter.chat(role, messages, tools, output_schema?, thinking?, stream?) -> Re
 | `/provider remove <name>` | 移除供應商（連同其 keychain 金鑰） |
 | `/key set <provider>` | 隱藏輸入（no-echo）token，存入 OS keychain |
 | `/key clear <provider>` | 刪除已存 token |
-| `/model list` / `/model set <role> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由（寫入使用者層級設定）；reset 清空覆寫、回到 repo `hz.toml` 的定義 |
+| `/model list` / `/model set <role> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由（寫入使用者層級設定）；reset 清空覆寫、回到 repo `aegis.toml` 的定義 |
 | `/status` | 供應商、金鑰狀態、目前路由、Docker 可用性 |
 | `/doctor` | 體檢：Docker、pre-baked 映像檔、供應商連通測試（host 端一次極小呼叫） |
 
 **憑證解析優先序**：環境變數 > OS keychain > 設定檔退回。
 
-- 環境變數：`HZ_<供應商大寫>_API_KEY`（例 `HZ_OPENROUTER_API_KEY`），並相容辨識慣用的 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`。
+- 環境變數：`AEGIS_<供應商大寫>_API_KEY`（例 `AEGIS_OPENROUTER_API_KEY`），並相容辨識慣用的 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`。
 - keychain：macOS Keychain / Linux libsecret / Windows Credential Manager。
-- 設定檔退回（無 keychain 環境）：`~/.config/hz/credentials.toml`，權限 0600，使用時警告一次。
+- 設定檔退回（無 keychain 環境）：`~/.config/aegis/credentials.toml`，權限 0600，使用時警告一次。
 - **金鑰防洩規則**：任何落盤輸出（log、evidence、SARIF、report）寫入前，以已登錄金鑰做 redaction；金鑰永不進沙箱（§7.1）、永不進報告、永不顯示於 `/provider list`。
 
 ---
@@ -332,10 +332,10 @@ PolicyCompiler → RunRequest：
 
 ```json
 {
-  "image": "hz-python-web@sha256:…",          // 僅接受 pack manifest 的 digest allowlist
+  "image": "aegis-python-web@sha256:…",          // 僅接受 pack manifest 的 digest allowlist
   "files": {"witness/app.py": "…", "witness/exploit.py": "…"},
   "mounts": [{"src": "TARGET_SNAPSHOT", "dst": "/target", "readonly": true}],
-  "cmd": ["/hz/entrypoint.py", "--template", "py/http-endpoint/v3"],   // 固定 entrypoint，模板參數化
+  "cmd": ["/aegis/entrypoint.py", "--template", "py/http-endpoint/v3"],   // 固定 entrypoint，模板參數化
   "service": {"cmd": "…（由 template metadata 決定）", "port": 8000, "wait_for": "GET /healthz"},
   "network": "none",
   "nonce": "由 runner 產生，prover 事前未知",
@@ -366,7 +366,7 @@ PolicyCompiler → RunRequest：
   "snapshot_id": "SN-…",
   "repo_tree_hash": "sha256:…",             // content-addressed snapshot manifest
   "worktree_manifest": {"dirty": [], "untracked": []},
-  "image": "hz-python-web@sha256:…",        // 永不使用可變 tag
+  "image": "aegis-python-web@sha256:…",        // 永不使用可變 tag
   "deps_lock_hash": "sha256:…",
   "pack": {"id": "python-web", "version": "1.2.0", "abi": 1},
   "runner_version": "0.3.1",
@@ -384,7 +384,7 @@ PolicyCompiler → RunRequest：
 - **canonical serialization**：hash 計算使用固定規則（sorted keys、UTF-8、整數／浮點格式明確），規則本身帶版本號——否則 hash 無定義。
 - **誠實語意**：本機 hash 證明「內容未變」，不證明「檔案不可變」；evidence 目錄以 append-only journal 管理，重算經由 bundle manifest。
 
-### 5.4 RunRequest 組態（頂層 config 示意，`hz.toml`）
+### 5.4 頂層組態示意（`aegis.toml`）
 
 ```toml
 [providers.my-openrouter]        # 供應商全由使用者新增；type = "anthropic" | "openai-compat"
@@ -397,7 +397,7 @@ reviewer = "anthropic/claude-sonnet-5"
 triager  = "anthropic/claude-sonnet-5"
 prover   = "anthropic/claude-opus-5"
 reporter = "anthropic/claude-sonnet-5"
-# 金鑰不寫在 hz.toml：憑證解析序見 §3.3
+# 金鑰不寫在 aegis.toml：憑證解析序見 §3.3
 
 [budget]                                # 依失敗分類計數，見 §9
 max_build_fixes_per_finding = 5
@@ -439,8 +439,8 @@ enabled = ["python-web"]
 
 ### 6.3 Pre-baked 映像檔
 
-- `hz-python-web:3.12`（slim + 常用框架預裝於 pip 快取層）
-- `hz-python-web-xss:3.12`（+ Playwright/Chromium）
+- `aegis-python-web:3.12`（slim + 常用框架預裝於 pip 快取層）
+- `aegis-python-web-xss:3.12`（+ Playwright/Chromium）
 - build 只拉這些映像檔 + pinned 依賴；版本鎖定、離線可重現。
 
 ### 6.4 Pack ABI（正式版本契約，非目錄慣例）
@@ -505,17 +505,17 @@ pack 是有版本契約的模組，每包必附 manifest，core 載入前驗證�
 ## 8. CLI 介面
 
 ```bash
-hz                         # 無參數 → 互動模式（slash 指令：/provider /key /model /status /doctor）
-hz console                 # 同上
-hz scan                    # Stage 0–2：inventory + candidates + triage（不執行任何代碼）
-hz prove [F-ID]            # Stage 3：對指定 finding（或全部）跑證明迴圈
-hz report                  # Stage 4：產 report.md / findings.json / SARIF / guardrails/
-hz prove F-0007 --watch    # 觀察單一 finding 的 prover 迴圈過程
+aegis                         # 無參數 → 互動模式（slash 指令：/provider /key /model /status /doctor）
+aegis console                 # 同上
+aegis scan                    # Stage 0–2：inventory + candidates + triage（不執行任何代碼）
+aegis prove [F-ID]            # Stage 3：對指定 finding（或全部）跑證明迴圈
+aegis report                  # Stage 4：產 report.md / findings.json / SARIF / guardrails/
+aegis prove F-0007 --watch    # 觀察單一 finding 的 prover 迴圈過程
 ```
 
 - 各階段產出物落在 `out/run-<ts>/`，狀態可續跑（斷點續掃）。
-- `hz prove` 是唯一會啟動沙箱的子命令。
-- 設定（供應商／金鑰／模型路由）**沒有一次性子命令**，一律在互動模式以 slash 指令完成；CI／腳本場景以環境變數 + `hz.toml` 替代（§3.3）。
+- `aegis prove` 是唯一會啟動沙箱的子命令。
+- 設定（供應商／金鑰／模型路由）**沒有一次性子命令**，一律在互動模式以 slash 指令完成；CI／腳本場景以環境變數 + `aegis.toml` 替代（§3.3）。
 - v1 主場景：本機、互動式；`--ci` 非互動模式（無 TUI、固定預算、exit code 反映嚴重度）為 M2 里程碑鋪路。
 
 ---
@@ -548,7 +548,7 @@ hz prove F-0007 --watch    # 觀察單一 finding 的 prover 迴圈過程
 
 **fresh-eyes 重試**：假設用盡時，orchestrator 可再開一個全新 session（不帶先前失敗敘事，避免定錨與學習性無助）做最後一輪。
 
-**NOT_PROVEN ≠ 丟棄**：附完整嘗試日誌（每個假設、每次失敗分類、正對照結果），報告中標示「未能證明（非否證）」；使用者可加大預算重跑：`hz prove F-ID --hypotheses 10`。
+**NOT_PROVEN ≠ 丟棄**：附完整嘗試日誌（每個假設、每次失敗分類、正對照結果），報告中標示「未能證明（非否證）」；使用者可加大預算重跑：`aegis prove F-ID --hypotheses 10`。
 
 ### 9.4 Token 消耗：預設不設限
 
@@ -632,7 +632,7 @@ out/run-<ts>/
 ## 15. 專案骨架（建議）
 
 ```
-src/hz/
+src/aegis/
 ├── domain/          # Finding、狀態機、schema
 ├── orchestrator/    # pipeline、journal、budget、policy compiler
 ├── agents/          # AgentRuntime、prompts

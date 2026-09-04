@@ -15,7 +15,7 @@
 | G3 | 用 **攻擊鏈距離（ACD）** 把「現在打不到」量化，驅動嚴重度與未來防護建議 |
 | G4 | 為每個 LATENT 問題產出 **Tripwires（絆線）**：semgrep 規則 + CI 檢查，未來任何人寫出攻擊鏈就立刻擋下 |
 | G5 | 全程可重現、可離線複查：witness 原始碼、exploit payload、oracle 判定全部落盤 |
-| G6 | 成本可控：三層**硬性預算上限**（per-finding / per-run / per-stage），觸頂即降級停止——煞車而非預估，防止任何掃描失控燒額度 |
+| G6 | 證明過程的停止由**失敗分類 + 正對照**決定：不放棄真漏洞、也不追幻覺漏洞；token 消耗預設不設限（BYOK），沙箱時數設上限防 hang |
 
 ### 1.2 非目標（v1）
 
@@ -86,8 +86,9 @@
 |------|------|
 | `REACHABLE` | D0/D1，已用直攻模式證明 |
 | `LATENT` | D2/D3，已用見證模式證明（附假設） |
-| `NOT_EXPLOITABLE` | 嘗試後無法構出有效攻擊鏈（附失敗原因與嘗試記錄） |
-| `UNVERIFIED` | 環境或預算因素未能完成證明 |
+| `NOT_EXPLOITABLE` | 假設被機械否證：正對照通過（輸入確實抵達 sink）但 oracle 不觸發，或偵測到 sanitizer／過濾 |
+| `NOT_PROVEN` | 嘗試未成功但**未被否證**；附完整嘗試日誌，可加大預算重跑 |
+| `UNVERIFIED` | 環境因素未能完成證明（非漏洞問題） |
 | `FALSE_POSITIVE` | 複審後判定誤報（附理由） |
 
 ---
@@ -239,14 +240,23 @@ plan ─▶ 選樣板 ─▶ 產生 {witness 原始碼, exploit 腳本, success 
      ─▶ sandbox.run（無外連）
      ─▶ oracle checker 機械判定
      ─▶ 成功 → PROVEN（落 evidence bundle）
-        失敗 → 換樣板（≤ M 種）或修正（≤ N 次嘗試）
-        用盡 → NOT_PROVEN（轉 guardrails-only 報告）／環境問題 → UNVERIFIED
+        失敗 → 失敗分類：env／harness／uncontrolled／controlled_miss（§9）
+              對應計數與修正；正對照通過的 miss 才計為反證
+        停止 → NOT_PROVEN（附嘗試日誌，可加大預算重跑）／NOT_EXPLOITABLE（否證）／UNVERIFIED（環境）
 ```
 
 - **直攻模式**（D0/D1）：不建 MVP，直接對目標 repo + 現有入口寫 exploit。
 - **見證模式**（D2/D3）：依 §2.2 約束產生 witness。
-- **失敗訊號區分**：payload 沒生效（漏洞假設可能錯）vs 環境壞掉（降級 UNVERIFIED）——兩者處理路徑不同。
-- 每個 finding 獨立預算：`max_attempts`、`max_sandbox_minutes`；總量再受全域 token budget 限制。
+- **失敗訊號區分**：payload 沒生效（漏洞假設可能錯）vs 環境壞掉（降級 UNVERIFIED）——兩者處理路徑不同，且前者須先過正對照（§9.2）才能計為反證。
+- 每個 finding 的預算依「失敗分類」計數（env 修正／harness 修正／攻擊鏈假設，見 §9），**不是**單一嘗試次數上限；token 消耗預設不設限（BYOK）。
+
+**Prover prompt 原則（防半途放棄，也防幻覺成功）**：
+
+- 明文告知：**你沒有放棄權**。每次失敗必須輸出結構化失敗分類與下一個具體修正；「試不出來」「太難」不是停止理由——只有 orchestrator 的計數器能停。
+- 每次迭代先寫三行再動手：上次失敗學到什麼 → 這次改什麼 → 預期觀察到什麼；同款 payload 盲目重試會被拒收。
+- 對稱禁止：禁止宣稱成功（只有 oracle checker 能判成功）、禁止自行宣告放棄（停止由 orchestrator 決定）。
+- 假設間不互相汙染：新的攻擊鏈假設從乾淨脈絡開始，或明確標記「前假設已否證、勿重用其結論」。
+- fresh-eyes 最後一輪由 orchestrator 觸發（全新 session、不帶先前失敗敘事），模型不得以此為由提早收工。
 
 ### Stage 4 — Report
 - `report.md`（人讀）、`findings.json`（機讀）、SARIF（IDE/CI 整合）、`guardrails/`（絆線）、`evidence/`（可複查 bundle）。
@@ -335,11 +345,12 @@ prover   = "anthropic/claude-opus-5"
 reporter = "anthropic/claude-sonnet-5"
 # 金鑰不寫在 hz.toml：憑證解析序見 §3.3
 
-[budget]
-max_attempts_per_finding = 3
-max_templates_per_finding = 4
+[budget]                                # 依失敗分類計數，見 §9
+max_build_fixes_per_finding = 5
+max_harness_fixes_per_finding = 8
+max_hypotheses_per_finding = 3          # 不同攻擊鏈假設數；想更鍥而不捨就調大
 max_sandbox_minutes_per_finding = 10
-max_tokens_total = 5_000_000
+# token 上限預設不設限（BYOK）；要保險絲時才加 max_tokens_total
 
 [sandbox]
 require_docker = true
@@ -359,7 +370,7 @@ enabled = ["python-web"]
 1. **semgrep 規則集**（候選產生）
 2. **harness 樣板庫**（HTTP endpoint / CLI / 檔案上傳 / 反序列化 / 模板渲染…各一個可直接填空的 witness 骨架）
 3. **payload 庫**（canary 化的良性探測載荷）
-4. **oracle 庫**（每種漏洞的機械成功判定）
+4. **oracle 庫**（每種漏洞的機械成功判定，附**正對照**探測——見 §9.2）
 5. **修補模式庫**（漏洞 → 參數化/編碼/白名單等標準修法 + 對應 tripwire）
 
 ### 6.2 四類漏洞的 v1 設計要點
@@ -428,19 +439,39 @@ hz prove F-0007 --watch    # 觀察單一 finding 的 prover 迴圈過程
 
 ---
 
-## 9. 成本與預算控制
+## 9. 證明預算與停止條件
 
-三層預算，任一觸頂即優雅降級（標 UNVERIFIED，不虛構）：
+### 9.1 失敗分類——預算不是「試幾次」，而是「試幾種」
 
-| 層 | 預設 | 說明 |
-|----|------|------|
-| per-finding | attempts ≤ 3、templates ≤ 4、沙箱 ≤ 10 min | 防單點失控 |
-| per-run | 總 tokens（例 5M）、總沙箱分鐘數、並行 finding 數 | 全域上限 |
-| per-stage | reviewer/prover 各自 token 上限 | 可單獨關閉 LLM 審查只跑 semgrep |
+每個失敗的 run 由確定性分析（必要時加一次廉價模型輔助判讀）歸類，不同類別各走各的計數器：
 
-成本控制手段：模型分層路由（便宜模型做機械性工作）、system prompt + inventory 的 prompt caching、semgrep 吸收大量低成本候選工作、triage 提早砍掉低價值候選（省 prover 角色的高階模型額度）、離線評測走 Batch API（供應商支援時半價）。
+| 類別 | 意義 | 計數器（預設） |
+|------|------|----------------|
+| `env` | build 失敗、依賴安裝失敗、映像檔問題 | env 修正 ≤ 5 |
+| `harness` | witness 接線錯、服務沒起來、exploit 腳本 bug | harness 修正 ≤ 8 |
+| `uncontrolled` | exploit 已送出，但無法證明輸入確實抵達 sink | 不計——先做正對照 |
+| `controlled_miss` | **正對照通過**（輸入確實流經 sink）但 oracle 不觸發 | 攻擊鏈假設 ≤ 3——對「漏洞假設」的真正反證 |
 
-**不做執行前成本預估**（BYOK 下無此需求）；預算是煞車，不是報價。
+### 9.2 正對照（positive control）——防半途放棄的核心
+
+宣告「打不到」之前必須先證明 harness 是通的：在 witness 內對同一 sink 跑一個已知會成功的良性探測，或以插樁輸出證明輸入確實流經目標程式碼。正對照通過後的 miss 才能計為反證——放棄的依據從「模型的感覺」換成機械證據。
+
+### 9.3 停止條件（全部由 orchestrator 判定，模型無權放棄）
+
+- 攻擊鏈假設用盡（預設 3；必須是**不同的**假設——不同攻擊鏈或不同載荷家族，同款重試不計）
+- 振盪：連續 2 次 harness 修正沒有產生新資訊 → 停
+- 假設被否證：witness 執行機械偵測到 sink 有 sanitizer／過濾 → 立即停，標 `NOT_EXPLOITABLE`
+- env 修正用盡 → `UNVERIFIED`
+- 沙箱時數上限（防 hang，預設每 finding 10 分鐘）
+- 使用者手動停止
+
+**fresh-eyes 重試**：假設用盡時，orchestrator 可再開一個全新 session（不帶先前失敗敘事，避免定錨與學習性無助）做最後一輪。
+
+**NOT_PROVEN ≠ 丟棄**：附完整嘗試日誌（每個假設、每次失敗分類、正對照結果），報告中標示「未能證明（非否證）」；使用者可加大預算重跑：`hz prove F-ID --hypotheses 10`。
+
+### 9.4 Token 消耗：預設不設限
+
+BYOK 下燒的是使用者自己的額度，**token 上限預設關閉**；要保險絲時可在 `[budget]` 選擇性開啟。沙箱時數上限保留——防的是 hang，不是花費。省額度的手段：便宜模型做機械性工作、prompt caching、semgrep 吸收低成本候選、triage 提早淘汰低價值候選、離線評測走 Batch API（供應商支援時半價）。**不做執行前成本預估**——預算是煞車，不是報價。
 
 ---
 
@@ -468,6 +499,7 @@ out/run-<ts>/
   - candidate recall（fixtures 中真實漏洞被 Stage 1 抓到的比例）
   - triage precision / recall
   - **proof success rate**（PROVEN 占真實漏洞比例——本工具的核心指標）
+  - false-abandonment rate（真實漏洞被誤標 NOT_PROVEN 的比例——直接量測「半途放棄」風險）
   - clean corpus 誤報率
   - cost per finding（tokens + 沙箱分鐘）、wall time
 - 評測跑分全程用 Batch API，固定 seed/溫度策略，結果入 repo 的 `eval/`。
@@ -479,7 +511,7 @@ out/run-<ts>/
 | 里程碑 | 內容 | 目的 |
 |--------|------|------|
 | **M0** | CLI 骨架 + **互動模式（slash 指令）+ BYOK 憑證** + inventory + **手工指定一個 finding** → 見證模式證明 end-to-end（SQLi 單一樣板、單一 oracle） | **先除最難的險**：prover 迴圈 + 沙箱 + oracle 這條最硬的鏈先打通；`LLMAdapter` 供應商介面在此定型 |
-| **M1** | semgrep + LLM 候選、merge/dedup、triage/ACD、report.md + findings.json、三層預算；Injection 家族完整（SQLi/CMDi/SSTI/反序列化/path traversal） | 完整流水線跑通、成本可控 |
+| **M1** | semgrep + LLM 候選、merge/dedup、triage/ACD、report.md + findings.json、**失敗分類制證明預算**；Injection 家族完整（SQLi/CMDi/SSTI/反序列化/path traversal） | 完整流水線跑通、停止條件可靠 |
 | **M2** | SSRF 假外網基建、XSS headless oracle、tripwires 產生器、SARIF、`--ci` 非互動模式（PR-diff 模式預留） | 擴漏洞類別、產生持續防護 |
 | **M3** | 存取控制 pack（多角色場景）、第二語言 sink pack（候選：JS/TS）、50 fixtures benchmark、簡易 dashboard（可選） | 驗證擴充介面的真實成本、建立評測基準 |
 
@@ -491,6 +523,7 @@ out/run-<ts>/
 |------|------|
 | MVP 過擬合：見證證明 ≠ 真實會發生 | 見證必須 import 原碼、最小化約束、產品假設明示於報告、ACD 誠實標分、人類可否決分類 |
 | 模型幻覺（宣稱證明成功） | oracle 機械判定是唯一升級路徑；evidence hash 串接；失敗一律降級不虛構 |
+| LLM 半途放棄（其實有漏洞） | 放棄權在 orchestrator：失敗分類制預算、正對照通過才算否證、fresh-eyes 重試；NOT_PROVEN 附日誌可加大預算重跑 |
 | 資安請求被模型拒絕（refusal） | 措辭解敏重試 → server-side fallback／切 Opus 4.8 → 仍敗則 UNVERIFIED |
 | 沙箱逃逸 | Docker 強制、run 無網路、唯讀掛載、資源上限、fs-diff 審計 |
 | API 金鑰外洩 | keychain 儲存 + 設定檔退回（0600）、落盤前全面 redaction、沙箱內零金鑰、`/provider list` 只顯示有無 |

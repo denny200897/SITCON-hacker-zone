@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,7 +138,7 @@ func stageEmptyPayload(t *testing.T, r *Runner, runID, img string) {
 	if r.HelperImage == "" {
 		r.HelperImage = img
 	}
-	if err := r.StageWitness(runID, StageFiles{}, []byte("")); err != nil {
+	if err := r.StageWitness(context.Background(), runID, StageFiles{}, []byte("")); err != nil {
 		t.Fatalf("StageWitness 失敗：%v", err)
 	}
 }
@@ -185,6 +186,7 @@ func TestSandboxHardeningInspect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DockerArgs 失敗：%v", err)
 	}
+	stageEmptyPayload(t, r, runID, img)
 	cid, err := r.Create(args)
 	if err != nil {
 		t.Fatalf("Create 失敗：%v", err)
@@ -299,6 +301,7 @@ func TestSandboxStartTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DockerArgs 失敗：%v", err)
 	}
+	stageEmptyPayload(t, r, runID, img)
 	cid, err := r.Create(args)
 	if err != nil {
 		t.Fatalf("Create 失敗：%v", err)
@@ -306,7 +309,7 @@ func TestSandboxStartTimeout(t *testing.T) {
 	cleanupRun(t, r, cid, runID)
 
 	start := time.Now()
-	exit, err := r.Start(cid, 2)
+	exit, err := r.Start(context.Background(), cid, 2)
 	if err != nil {
 		t.Fatalf("Start 逾時路徑不應回 Go 層錯誤：%v", err)
 	}
@@ -339,6 +342,7 @@ func TestSandboxCopyInAndRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DockerArgs 失敗：%v", err)
 	}
+	stageEmptyPayload(t, r, runID, img)
 	cid, err := r.Create(args)
 	if err != nil {
 		t.Fatalf("Create 失敗：%v", err)
@@ -349,7 +353,7 @@ func TestSandboxCopyInAndRun(t *testing.T) {
 	if err := r.CopyIn(cid, OutMountPoint+"/payload.txt", []byte("AEGIS_TEST_NONCE\n")); err != nil {
 		t.Fatalf("CopyIn 失敗：%v", err)
 	}
-	exit, err := r.Start(cid, 30)
+	exit, err := r.Start(context.Background(), cid, 30)
 	if err != nil {
 		t.Fatalf("Start 失敗：%v", err)
 	}
@@ -373,6 +377,7 @@ func TestSandboxDiffIgnoresMounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DockerArgs 失敗：%v", err)
 	}
+	stageEmptyPayload(t, r, runID, img)
 	cid, err := r.Create(args)
 	if err != nil {
 		t.Fatalf("Create 失敗：%v", err)
@@ -380,7 +385,7 @@ func TestSandboxDiffIgnoresMounts(t *testing.T) {
 	cleanupRun(t, r, cid, runID)
 	ensureOutVolume(t, r, runID, img) // busybox 映像未 chown /aegis/out，先補給 65532
 
-	exit, err := r.Start(cid, 30)
+	exit, err := r.Start(context.Background(), cid, 30)
 	if err != nil {
 		t.Fatalf("Start 失敗：%v", err)
 	}
@@ -413,16 +418,17 @@ func TestSandboxReclaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DockerArgs 失敗：%v", err)
 	}
+	stageEmptyPayload(t, r, runID, img)
 	cid, err := r.Create(args)
 	if err != nil {
 		t.Fatalf("Create 失敗：%v", err)
 	}
 	ensureOutVolume(t, r, runID, img) // busybox 映像未 chown /aegis/out，先補給 65532
-	if _, err := r.Start(cid, 30); err != nil {
+	if _, err := r.Start(context.Background(), cid, 30); err != nil {
 		t.Fatalf("Start 失敗：%v", err)
 	}
 
-	if err := r.Reclaim(cid, runID, destDir); err != nil {
+	if err := r.Reclaim(context.Background(), cid, runID, destDir, testSeccompFile(t)); err != nil {
 		t.Fatalf("Reclaim 失敗：%v", err)
 	}
 	// fs_diff.txt 應已落檔（§17.6-1）；寫入全在 tmpfs／volume 時內容可為空。
@@ -446,6 +452,102 @@ func TestSandboxReclaim(t *testing.T) {
 	}
 }
 
+// TestSandboxStageWitness：StageWitness 注入的 witness 檔案與 payload 在容器內
+// 以唯讀 named volume／subpath 掛載可讀（ADR 0002；§17.4-4 注入檔案原則）。
+// 容器以 grep 驗證內容（不用 stdout 判成功，§23-3）；witness 目錄對容器唯讀。
+func TestSandboxStageWitness(t *testing.T) {
+	r := requireDocker(t)
+	img := busyboxDigestRef(t, r)
+	r.HelperImage = img
+	runID := "R-9907"
+	snapDir := t.TempDir()
+
+	if err := r.StageWitness(context.Background(), runID, StageFiles{
+		"app.py": []byte("AEGIS_WITNESS_APP\n"),
+	}, []byte("AEGIS_PAYLOAD_NONCE'\n")); err != nil {
+		t.Fatalf("StageWitness 失敗：%v", err)
+	}
+
+	args, err := DockerArgs(RunSpec{
+		RunID: runID, SnapshotID: "SNAP-9907", Image: img,
+		Cmd: []string{"sh", "-c",
+			"grep -q AEGIS_WITNESS_APP " + WitnessMountPoint + "/app.py && " +
+				"grep -q \"AEGIS_PAYLOAD_NONCE'\" " + PayloadPath},
+		Network: NetworkNone, Seccomp: testSeccompFile(t), TimeoutSec: 30,
+	}, snapDir)
+	if err != nil {
+		t.Fatalf("DockerArgs 失敗：%v", err)
+	}
+	cid, err := r.Create(args)
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+	cleanupRun(t, r, cid, runID)
+
+	exit, err := r.Start(context.Background(), cid, 30)
+	if err != nil {
+		t.Fatalf("Start 失敗：%v", err)
+	}
+	if exit != 0 {
+		t.Fatalf("exit = %d，want 0（witness 檔案與 payload 應可讀且內容相符）", exit)
+	}
+	// 容器結束後 witness volume 應隨 Reclaim 清收；此處先刪容器（Reclaim 第 3 步
+	// 順序：rm 容器 → rm volume）再驗證 volume 刪除。
+	if _, _, err := r.runTimeout(30*time.Second, "rm", cid); err != nil {
+		t.Fatalf("rm 容器失敗：%v", err)
+	}
+	if err := r.RemoveWitnessVolume(runID); err != nil {
+		t.Fatalf("RemoveWitnessVolume 失敗：%v", err)
+	}
+	if _, _, err := r.runTimeout(30*time.Second, "volume", "inspect", WitnessVolumeName(runID)); err == nil {
+		t.Fatalf("witness volume %s 應已刪除", WitnessVolumeName(runID))
+	}
+}
+
+// TestSandboxStartContextCancel：Start 必須接受 ctx——呼叫端取消（使用者取消、
+// Prove(ctx) 取消）時立即 docker kill 並中止等待（P2-2 adversarial：舊實作自建
+// background timeout，外層取消完全無效）。逾時語意不變：timeout 到點仍記 exit 124。
+func TestSandboxStartContextCancel(t *testing.T) {
+	r := requireDocker(t)
+	img := busyboxDigestRef(t, r)
+	runID := "R-9908"
+	snapDir := t.TempDir()
+
+	args, err := DockerArgs(RunSpec{
+		RunID: runID, SnapshotID: "SNAP-9908", Image: img,
+		Cmd: []string{"sleep", "120"}, Network: NetworkNone,
+		Seccomp: testSeccompFile(t), TimeoutSec: 30,
+	}, snapDir)
+	if err != nil {
+		t.Fatalf("DockerArgs 失敗：%v", err)
+	}
+	stageEmptyPayload(t, r, runID, img)
+	cid, err := r.Create(args)
+	if err != nil {
+		t.Fatalf("Create 失敗：%v", err)
+	}
+	cleanupRun(t, r, cid, runID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(1500*time.Millisecond, cancel)
+	start := time.Now()
+	exit, err := r.Start(ctx, cid, 60)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("呼叫端取消後 Start 應回錯誤，卻回 (exit %d, nil)", exit)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("Start 取消錯誤應包 context.Canceled，got %v", err)
+	}
+	if elapsed > 15*time.Second {
+		t.Fatalf("取消後 Start 耗時 %v：外層取消未即時終止 docker start", elapsed)
+	}
+	// docker client 被 kill 後容器須已由 docker kill 終止（§7.1 清理）。
+	if state := dockerState(t, r, cid); state != "exited" {
+		t.Errorf("取消後容器 State.Status = %q，want exited（已 kill）", state)
+	}
+}
+
 // TestSandboxReaper：以 label 反查殘留容器並刪除；ssrf network 不存在不算失敗（§17.5-5）。
 func TestSandboxReaper(t *testing.T) {
 	r := requireDocker(t)
@@ -465,9 +567,11 @@ func TestSandboxReaper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create 失敗：%v", err)
 	}
+	stageEmptyPayload(t, r, runID, img)
 	t.Cleanup(func() { // reaper 失敗時的保底清理
 		_, _, _ = r.runTimeout(30*time.Second, "rm", "-f", cid)
 		_, _, _ = r.runTimeout(30*time.Second, "volume", "rm", OutVolumePrefix+runID)
+		_ = r.RemoveWitnessVolume(runID)
 	})
 
 	if err := r.Reaper(runID); err != nil {

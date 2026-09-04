@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,6 +55,83 @@ func TestDockerArgsCanonicalFlagSet(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("DockerArgs 非閉集順序：\n got = %#v\nwant = %#v", got, want)
 	}
+}
+
+// TestReclaimHelperHardeningFlags：§17.6-2 收回 helper 的 docker run 參數須與正式
+// run 容器（§17.1）套用同一份 hardening（seccomp／memory／cpus／pids／nofile／tmpfs
+// ／cap-drop／no-new-privileges／read-only／non-root），逐 flag 斷言（純函式測試，
+// 不碰 docker）。P2-2 adversarial：收回 helper 曾為手寫的部分 flag 清單，缺上述限制。
+func TestReclaimHelperHardeningFlags(t *testing.T) {
+	seccomp := "/host/packs/python-web/seccomp.json"
+	img := digestImg("aegis/helper")
+	got, err := reclaimHelperArgs("R-0001", "/host/run/R-0001", seccomp, img)
+	if err != nil {
+		t.Fatalf("reclaimHelperArgs 回傳錯誤：%v", err)
+	}
+	// 與 DockerArgs 同源的 hardening 逐項（§17.1；§23-8：缺 seccomp 即拒組）。
+	pairs := [][2]string{
+		{"--cap-drop", "ALL"},
+		{"--security-opt", "no-new-privileges:true"},
+		{"--security-opt", "seccomp=" + seccomp},
+		{"--user", ContainerUser},
+		{"--tmpfs", TmpfsTmp},
+		{"--tmpfs", TmpfsRun},
+		{"--pids-limit", "128"},
+		{"--memory", MemoryLimit},
+		{"--cpus", CPUsLimit},
+		{"--ulimit", fmt.Sprintf("nofile=%d", NoFileLimit)},
+		{"--network", NetworkNone},
+	}
+	for _, p := range pairs {
+		if !containsPair(got, p[0], p[1]) {
+			t.Errorf("收回 helper 缺 hardening flag %s %s，got %#v", p[0], p[1], got)
+		}
+	}
+	// read-only rootfs（§17.1）：helper 自身也不得寫 rootfs。
+	if !containsFlag(got, "--read-only") {
+		t.Errorf("收回 helper 缺 --read-only，got %#v", got)
+	}
+	// --rm（§17.6 helper 用後即棄）；volume 以唯讀掛 /from，destDir 掛 /to。
+	if !containsFlag(got, "--rm") {
+		t.Errorf("收回 helper 缺 --rm，got %#v", got)
+	}
+	if !containsPair(got, "-v", OutVolumePrefix+"R-0001:/from:ro") {
+		t.Errorf("收回 helper 缺 -v %s:/from:ro，got %#v", OutVolumePrefix+"R-0001", got)
+	}
+	if !containsPair(got, "-v", "/host/run/R-0001:/to") {
+		t.Errorf("收回 helper 缺 -v destDir:/to，got %#v", got)
+	}
+	// 映像須為 digest 形式，cp 指令緊跟其後（無 shell，§23-5）。
+	i := indexOf(got, img)
+	if i < 0 {
+		t.Fatalf("helper 映像 %q 未出現在參數中：got %#v", img, got)
+	}
+	if !reflect.DeepEqual(got[i+1:], []string{"cp", "-a", "/from/.", "/to/"}) {
+		t.Fatalf("helper cmd 尾段不符：got %#v", got[i+1:])
+	}
+	// §23-8：缺 seccomp profile 一律拒組，不得靜默放寬。
+	if _, err := reclaimHelperArgs("R-0001", "/host/run/R-0001", "", img); err == nil {
+		t.Errorf("缺 seccomp profile 應被拒收")
+	}
+}
+
+// containsFlag 斷言 flags 內存在單一 flag（無值）。
+func containsFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+func indexOf(args []string, s string) int {
+	for i, a := range args {
+		if a == s {
+			return i
+		}
+	}
+	return -1
 }
 
 // TestDockerArgsSSRFNetwork：ssrf-internal → network 名固定 aegis-ssrf-<run_id>（§17.5-1）。

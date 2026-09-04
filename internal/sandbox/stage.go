@@ -16,6 +16,7 @@ package sandbox
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"fmt"
 	"os/exec"
 	"path"
@@ -97,8 +98,9 @@ func stageTar(files StageFiles, payload []byte) ([]byte, error) {
 
 // StageWitness 執行注入 staging（ADR 0002）：建 per-run volume，經 staging 容器
 // 以 tar 注入 files 與 payload（payload 空值也寫入空檔，subpath 掛載需要它存在）。
+// ctx 為呼叫端取消通道：取消即時中止注入的每個 docker 步驟（P2-2）。
 // staging 容器帶 label aegis.run_id，失敗殘留可由 Reaper(runID) 清收。
-func (r *Runner) StageWitness(runID string, files StageFiles, payload []byte) error {
+func (r *Runner) StageWitness(ctx context.Context, runID string, files StageFiles, payload []byte) error {
 	if !idRe.MatchString(runID) {
 		return fmt.Errorf("sandbox: StageWitness 的 runID 非法：%q", runID)
 	}
@@ -107,7 +109,7 @@ func (r *Runner) StageWitness(runID string, files StageFiles, payload []byte) er
 	}
 	vol := WitnessVolumeName(runID)
 
-	if _, stderr, err := r.runTimeout(30*time.Second, "volume", "create", vol); err != nil {
+	if _, stderr, err := r.runCtx(ctx, 30*time.Second, "volume", "create", vol); err != nil {
 		return wrapErr("volume create", stderr, err)
 	}
 	tarBytes, err := stageTar(files, payload)
@@ -123,25 +125,32 @@ func (r *Runner) StageWitness(runID string, files StageFiles, payload []byte) er
 		"-v", vol+":/stage",
 		r.HelperImage, "true",
 	}
-	if _, stderr, err := r.runTimeout(60*time.Second, stageArgs...); err != nil {
+	if _, stderr, err := r.runCtx(ctx, 60*time.Second, stageArgs...); err != nil {
 		return wrapErr("stage create", stderr, err)
 	}
 	stageCid := "aegis-stage-" + runID
 
 	// tar 經 stdin 注入（docker cp - <cid>:/stage）。
-	if err := r.cpTarStdin(stageCid, "/stage", tarBytes); err != nil {
+	if err := r.cpTarStdin(ctx, stageCid, "/stage", tarBytes); err != nil {
 		return err
 	}
 
-	if _, stderr, err := r.runTimeout(30*time.Second, "rm", stageCid); err != nil {
+	if _, stderr, err := r.runCtx(ctx, 30*time.Second, "rm", stageCid); err != nil {
 		return wrapErr("stage rm", stderr, err)
 	}
 	return nil
 }
 
 // cpTarStdin 以 tar 流注入容器路徑（docker cp - <cid>:<dest>）。
-func (r *Runner) cpTarStdin(cid, dest string, tarBytes []byte) error {
-	cmd := exec.Command(r.bin(), "cp", "-", cid+":"+dest)
+// ctx 取消即終止 docker cp 子程序（P2-2：不得用無 context 的 exec.Command）；
+// 呼叫端未設 deadline 時自套 60s 逾時（host 端強制，§17.1）。
+func (r *Runner) cpTarStdin(ctx context.Context, cid, dest string, tarBytes []byte) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, r.bin(), "cp", "-", cid+":"+dest)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("sandbox: cp stdin pipe: %w", err)
@@ -154,13 +163,22 @@ func (r *Runner) cpTarStdin(cid, dest string, tarBytes []byte) error {
 	if _, err := stdin.Write(tarBytes); err != nil {
 		_ = stdin.Close()
 		_ = cmd.Wait()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("sandbox: cp tar 注入被取消：%w", ctxErr)
+		}
 		return fmt.Errorf("sandbox: cp tar 寫入失敗：%w", err)
 	}
 	if err := stdin.Close(); err != nil {
 		_ = cmd.Wait()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("sandbox: cp tar 注入被取消：%w", ctxErr)
+		}
 		return fmt.Errorf("sandbox: cp stdin 關閉失敗：%w", err)
 	}
 	if err := cmd.Wait(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("sandbox: cp tar 注入被取消：%w", ctxErr)
+		}
 		return wrapErr("cp", errBuf.Bytes(), err)
 	}
 	return nil

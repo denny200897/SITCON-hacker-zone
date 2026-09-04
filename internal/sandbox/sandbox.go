@@ -51,6 +51,14 @@ func (r *Runner) runTimeout(d time.Duration, args ...string) (stdout, stderr []b
 	return r.run(ctx, args...)
 }
 
+// runCtx 是 runTimeout 的 ctx 傳播版：外層取消（使用者取消、Prove(ctx) 取消）即時
+// 終止 docker 工作（P2-2），到點逾時仍以 WithTimeout 在 host 端強制（§17.1）。
+func (r *Runner) runCtx(ctx context.Context, d time.Duration, args ...string) (stdout, stderr []byte, err error) {
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return r.run(ctx, args...)
+}
+
 // wrapErr 把帶 exit code 的 docker 失敗包成顯式錯誤（stderr 尾段附上，利於分類）。
 func wrapErr(op string, stderr []byte, err error) error {
 	if err == nil {
@@ -160,28 +168,40 @@ func (r *Runner) Kill(cid string) error {
 }
 
 // Start 執行 docker start -a（attached，其 exit code 即容器 exit code，§17.1）。
-// 逾時由 host 端強制：context.WithTimeout 到點 → docker kill <cid> 並記 exit 124
+// ctx 為呼叫端取消通道（使用者取消、Prove(ctx) 取消）：取消即時終止 docker start
+// 並 docker kill <cid>，回傳包 context.Canceled 的錯誤（P2-2：不得自建 background
+// timeout 無視外層取消）。逾時語意不變：timeoutSec 到點 → docker kill 並記 exit 124
 //（macOS 無 timeout(1)，故不用外部 timeout 指令）。
 // 容器以非零 exit code 結束（含 124/125/126/127）不是 Go 層錯誤——回 (code, nil)，
 // 由 orchestrator 依 domain.ExitClassifies 分類（§17.1 exit code 閉集）。
-func (r *Runner) Start(cid string, timeoutSec int) (exit int, err error) {
+func (r *Runner) Start(ctx context.Context, cid string, timeoutSec int) (exit int, err error) {
 	if timeoutSec < 1 {
 		return 0, fmt.Errorf("sandbox: Start 的 timeoutSec 須 >= 1，got %d", timeoutSec)
 	}
 	if cid == "" {
 		return 0, fmt.Errorf("sandbox: Start 的 cid 為空")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+	// 逾時與取消並行：外層 ctx 取消或 timeoutSec 到點都會讓 runCtx.Err() 非空；
+	// 兩者以 err 差異區分（DeadlineExceeded=逾時、Canceled=呼叫端取消）。
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, r.bin(), "start", "-a", cid)
+	cmd := exec.CommandContext(runCtx, r.bin(), "start", "-a", cid)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 	runErr := cmd.Run()
 
-	if ctx.Err() != nil { // host 端逾時：強制 kill 容器，記 exit 124（§17.1）
+	if ctxErr := runCtx.Err(); ctxErr != nil {
+		// host 端強制：docker client 已被 kill，容器可能仍在跑，一律 docker kill（§7.1）。
 		if killErr := r.Kill(cid); killErr != nil {
+			if ctxErr == context.Canceled {
+				return 0, fmt.Errorf("sandbox: run 被取消且 docker kill 失敗（%s）：%w", cid, killErr)
+			}
 			return 0, fmt.Errorf("sandbox: run 逾時且 docker kill 失敗（%s）：%w", cid, killErr)
+		}
+		if ctxErr == context.Canceled && ctx.Err() != nil {
+			// 呼叫端取消（非逾時）：回取消錯誤，讓 orchestrator 中止本次 Prove。
+			return 0, fmt.Errorf("sandbox: run %s 被取消：%w", cid, ctxErr)
 		}
 		return domain.ExitTimeout, nil
 	}
@@ -242,14 +262,40 @@ func ignoreDiffPath(path string) bool {
 
 // ---- artifacts 收回（§17.6 固定三步） ----
 
+// reclaimHelperArgs 組出 §17.6-2 收回 helper 的 docker run 參數閉集（純函式，
+// 供 unit test 逐 flag 斷言）。hardening 與正式 run 容器同一份（HardeningFlags，
+// §17.1；P2-2：不得為手寫的部分清單）——cap-drop ALL／no-new-privileges／seccomp／
+// non-root／read-only／tmpfs／pids／memory／cpus／nofile；network none；aegis-out
+// volume 唯讀掛 /from、destDir 可寫掛 /to（收回 helper 是唯一例外，§17.6）。
+func reclaimHelperArgs(runID, destDir, seccomp, image string) ([]string, error) {
+	hardening, err := HardeningFlags(seccomp)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"run", "--rm"}
+	args = append(args, hardening...)
+	args = append(args,
+		"--network", NetworkNone,
+		"-v", OutVolumePrefix+runID+":/from:ro",
+		"-v", destDir+":/to",
+		image,
+		"cp", "-a", "/from/.", "/to/",
+	)
+	return args, nil
+}
+
 // Reclaim 依 §17.6 收回 run 產物：
 //  1. docker diff <cid> → 原始輸出落 <destDir>/fs_diff.txt；
-//  2. 收回 helper（docker run --rm，套用 hardening：cap-drop ALL／no-new-privileges／
-//     read-only／non-root／network none）把 aegis-out-<runID> volume 內容 cp 到 destDir；
+//  2. 收回 helper（docker run --rm，hardening 與正式 run 容器同一份，§17.1／§17.6）
+//     把 aegis-out-<runID> volume 內容 cp 到 destDir；
 //  3. docker rm <cid> + docker volume rm aegis-out-<runID> 與 aegis-witness-<runID>。
 //
+// seccomp 為正式 run 使用的 pack profile 路徑，helper 套同一份（§23-8：不放寬）。
+// ctx 為呼叫端取消通道；取消即時中止 diff／helper／rm（P2-2）。第 3 步即使前面
+// 失敗或取消也照做，保證資源收回——清理路徑以 context.Background() 自行跑。
+//
 // 禁止任何 host 目錄以可寫模式掛入證明 run 容器；收回 helper 是唯一例外（§17.6）。
-func (r *Runner) Reclaim(cid, runID, destDir string) error {
+func (r *Runner) Reclaim(ctx context.Context, cid, runID, destDir, seccomp string) error {
 	if cid == "" {
 		return fmt.Errorf("sandbox: Reclaim 的 cid 為空")
 	}
@@ -268,7 +314,7 @@ func (r *Runner) Reclaim(cid, runID, destDir string) error {
 	}
 
 	// 1. fs-diff 原始輸出落檔（§17.6-1）。
-	raw, stderr, err := r.runTimeout(30*time.Second, "diff", cid)
+	raw, stderr, err := r.runCtx(ctx, 30*time.Second, "diff", cid)
 	if err != nil {
 		setErr(wrapErr("diff", stderr, err))
 	} else if wErr := os.WriteFile(filepath.Join(destDir, "fs_diff.txt"), raw, 0o644); wErr != nil {
@@ -276,28 +322,23 @@ func (r *Runner) Reclaim(cid, runID, destDir string) error {
 	}
 
 	// 2. artifacts 收回 helper（§17.6-2）；HelperImage 必為 digest（pack manifest 記錄）。
-	if !digestRe.MatchString(r.HelperImage) {
+	switch {
+	case !digestRe.MatchString(r.HelperImage):
 		setErr(fmt.Errorf("sandbox: HelperImage 須為 digest 形式（<name>@sha256:<64hex>，§17.6），got %q", r.HelperImage))
-	} else {
-		helperArgs := []string{
-			"run", "--rm",
-			"--cap-drop", "ALL",
-			"--security-opt", "no-new-privileges:true",
-			"--read-only",
-			"--user", ContainerUser,
-			"--network", NetworkNone,
-			"-v", OutVolumePrefix+runID+":/from:ro",
-			"-v", destDir+":/to",
-			r.HelperImage,
-			"cp", "-a", "/from/.", "/to/",
+	default:
+		helperArgs, hErr := reclaimHelperArgs(runID, destDir, seccomp, r.HelperImage)
+		if hErr != nil {
+			setErr(hErr)
+			break
 		}
-		_, stderr, err := r.runTimeout(120*time.Second, helperArgs...)
+		_, stderr, err := r.runCtx(ctx, 120*time.Second, helperArgs...)
 		if err != nil {
 			setErr(wrapErr("reclaim run", stderr, err))
 		}
 	}
 
 	// 3. 刪容器與 volume（§17.6-3）；即使前面已失敗也照做，保證資源收回。
+	// 以 context.Background() 清理：取消路徑下仍須刪容器與 volume（§7.1）。
 	if _, stderr, err := r.runTimeout(30*time.Second, "rm", cid); err != nil {
 		setErr(wrapErr("rm", stderr, err))
 	}

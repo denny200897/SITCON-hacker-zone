@@ -88,6 +88,29 @@ var (
 	idRe     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 )
 
+// HardeningFlags 組出 §17.1 canonical hardening flags 的共用閉集（不含 network、
+// 掛載、label、cmd）。正式 run 容器（DockerArgs）與 §17.6-2 收回 helper 必須共用
+// 本函式——收回 helper 不得出現「較寬鬆」的部分清單（P2-2：seccomp／memory／cpus／
+// pids／nofile／tmpfs 一律同源）。缺 seccomp profile 即拒組（§23-8：不放寬 hardening）。
+func HardeningFlags(seccomp string) ([]string, error) {
+	if seccomp == "" {
+		return nil, fmt.Errorf("sandbox: 缺 seccomp profile 路徑（§23-8：不放寬 hardening）")
+	}
+	return []string{
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges:true",
+		"--security-opt", "seccomp=" + seccomp,
+		"--user", ContainerUser,
+		"--read-only",
+		"--tmpfs", TmpfsTmp,
+		"--tmpfs", TmpfsRun,
+		"--pids-limit", fmt.Sprintf("%d", PidsLimit),
+		"--memory", MemoryLimit,
+		"--cpus", CPUsLimit,
+		"--ulimit", fmt.Sprintf("nofile=%d", NoFileLimit),
+	}, nil
+}
+
 // DockerArgs 依 §17.1 組出 docker create 的完整參數閉集（不含 "docker" 與 "create" 本身；
 // 順序固定，供 unit test 以 reflect.DeepEqual 逐項斷言、§22 M0a 以 docker inspect 驗證生效）。
 // 映像非 digest 形式（@sha256:64hex）→ 回 error（可變 tag 拒絕，§7.1）。
@@ -101,10 +124,6 @@ func DockerArgs(req RunSpec, snapshotDir string) ([]string, error) {
 	if !digestRe.MatchString(req.Image) {
 		// §7.1：映像檔僅接受 digest，可變 tag 一律拒絕。
 		return nil, fmt.Errorf("sandbox: image 須為 digest 形式（<name>@sha256:<64hex>），拒收：%q", req.Image)
-	}
-	if req.Seccomp == "" {
-		// §23-8：不放寬 hardening——缺 profile 即拒組，不靜默退回 docker 預設。
-		return nil, fmt.Errorf("sandbox: 缺 seccomp profile 路徑（RunSpec.Seccomp 為空）")
 	}
 	if req.TimeoutSec < 1 {
 		return nil, fmt.Errorf("sandbox: TimeoutSec 須 >= 1，got %d", req.TimeoutSec)
@@ -136,20 +155,13 @@ func DockerArgs(req RunSpec, snapshotDir string) ([]string, error) {
 		envArgs = append(envArgs, "--env", e)
 	}
 
-	// §17.1 canonical run flags——閉集；新增或調整須同步改 flags_test.go 的逐項斷言。
-	args := []string{
-		"--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges:true",
-		"--security-opt", "seccomp=" + req.Seccomp,
-		"--user", ContainerUser,
-		"--read-only",
-		"--tmpfs", TmpfsTmp,
-		"--tmpfs", TmpfsRun,
-		"--pids-limit", fmt.Sprintf("%d", PidsLimit),
-		"--memory", MemoryLimit,
-		"--cpus", CPUsLimit,
-		"--ulimit", fmt.Sprintf("nofile=%d", NoFileLimit),
+	// §17.1 canonical run flags——閉集；與 §17.6-2 收回 helper 同源（HardeningFlags）。
+	// 新增或調整須同步改 flags_test.go 的逐項斷言。
+	hardening, err := HardeningFlags(req.Seccomp)
+	if err != nil {
+		return nil, err
 	}
+	args := append([]string{}, hardening...)
 	args = append(args, netArgs...)
 	args = append(args, envArgs...)
 	args = append(args,

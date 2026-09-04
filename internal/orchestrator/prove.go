@@ -285,7 +285,7 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if pl, ok := rr["payload"].(string); ok {
 		payload = []byte(pl)
 	}
-	if err := p.Runner.StageWitness(runID, files, payload); err != nil {
+	if err := p.Runner.StageWitness(ctx, runID, files, payload); err != nil {
 		return "", "", 0, fmt.Errorf("orchestrator: 注入 staging %s: %w", runID, err)
 	}
 
@@ -306,7 +306,9 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if err != nil {
 		return "", "", 0, err
 	}
-	exit, err = p.Runner.Start(cid, timeout)
+	// Start 以 ctx 傳播呼叫端取消（使用者取消／Prove(ctx) 取消即時終止容器；
+	// P2-2）；timeout 逾時語意不變（§17.1 host 端強制）。
+	exit, err = p.Runner.Start(ctx, cid, timeout)
 	if err != nil {
 		return "", "", 0, err
 	}
@@ -316,7 +318,8 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if err != nil {
 		return "", "", exit, err
 	}
-	if rerr := p.Runner.Reclaim(cid, runID, artDir); rerr != nil {
+	// Reclaim 套與 run 容器同一份 seccomp／hardening（§17.6-2、§23-8；P2-2）。
+	if rerr := p.Runner.Reclaim(ctx, cid, runID, artDir, seccomp); rerr != nil {
 		return "", "", exit, fmt.Errorf("orchestrator: reclaim %s: %w", runID, rerr)
 	}
 

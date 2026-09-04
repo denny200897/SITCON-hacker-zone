@@ -1,6 +1,7 @@
 package evidence
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,3 +131,93 @@ func TestRunDirFor(t *testing.T) {
 		t.Fatalf("got %s", d)
 	}
 }
+// ---- P2-3 adversarial tests（先寫、先驗證在現行實作上失敗，再修復；docs/acceptance-m0a-m0c.md） ----
+
+// TestStoreWriteRefusesOverwrite：append-only 語意（§5.3）——同 id 不得覆寫既有 EV。
+func TestStoreWriteRefusesOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = s.Write(map[string]any{"kind": "negative", "n": int64(1)}, "EV-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "evidence", "EV-0001.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 同 id 重寫：必須被拒（O_EXCL），既有檔案不得被改動。
+	if _, _, err := s.Write(map[string]any{"kind": "negative", "n": int64(999)}, "EV-0001"); err == nil {
+		t.Fatal("同 id 的 Write 未被拒絕：evidence store 可被覆寫（P2-3）")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("被拒的 Write 仍改動了既有 EV 檔")
+	}
+	if err := VerifyChain(filepath.Join(dir, "evidence")); err != nil {
+		t.Fatalf("覆寫嘗試後鏈驗證失敗: %v", err)
+	}
+	// 被拒後鏈尾狀態不得污染：下一筆仍能正常 append。
+	if _, _, err := s.Write(map[string]any{"kind": "positive", "n": int64(2)}, "EV-0002"); err != nil {
+		t.Fatalf("被拒後正常 append 失敗: %v", err)
+	}
+	if err := VerifyChain(filepath.Join(dir, "evidence")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStoreRejectsBadID：id 必須符合 ^EV-[0-9]{4}$（§21.2 閉集格式）。
+func TestStoreRejectsBadID(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"EV-1", "EV-00012", "EV-abcd", "ev-0001", "EV-0001x", "R-0001", ""} {
+		if _, _, err := s.Write(map[string]any{"kind": "negative"}, bad); err == nil {
+			t.Fatalf("非法 id %q 未被拒絕", bad)
+		}
+	}
+	entries, _ := os.ReadDir(filepath.Join(dir, "evidence"))
+	if len(entries) != 0 {
+		t.Fatalf("非法 id 不應落檔，得 %d 個檔案", len(entries))
+	}
+}
+
+// TestNewStoreFailsOnCorruptedMiddle：開啟 store 必須驗整條既有鏈，
+// 中段被篡改時不得接受（P2-3：只 hash 最後一筆無法偵測）。
+func TestNewStoreFailsOnCorruptedMiddle(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, n := range []int64{1, 2, 3} {
+		if _, _, err := s.Write(map[string]any{"kind": "negative", "n": n}, fmt.Sprintf("EV-%04d", i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 篡改中段 EV-0002。
+	mid := filepath.Join(dir, "evidence", "EV-0002.json")
+	b, err := os.ReadFile(mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(b), `"n":2`, `"n":99`, 1)
+	if tampered == string(b) {
+		t.Fatal("測試前提失效：未成功改寫 EV-0002 內容")
+	}
+	if err := os.WriteFile(mid, []byte(tampered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewStore(dir); err == nil {
+		t.Fatal("NewStore 接受了中段被篡改的鏈（P2-3：未驗整條 chain）")
+	}
+}
+

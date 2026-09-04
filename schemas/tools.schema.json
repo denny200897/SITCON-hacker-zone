@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/tools.schema.json",
+  "title": "Agent tool input schemas",
+  "description": "§18.1 工具白名單各工具的輸入 schema（真源；adapter 不得 struct-tag 生成）",
+  "definitions": {
+    "read_code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "snapshot 內相對路徑（以 snapshot 根開頭驗證；越界即政策拒絕）"
+        },
+        "start": {"type": "integer", "minimum": 1, "description": "起始行（1-based 含）；缺省自檔首"},
+        "end": {"type": "integer", "minimum": 1, "description": "結束行（含）；缺省至檔尾（有上限截斷）"}
+      }
+    },
+    "search_code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query"],
+      "properties": {
+        "query": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "RE2 regexp（不支援 lookahead/backreference；編譯失敗即政策拒絕）"
+        }
+      }
+    },
+    "semgrep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule"],
+      "properties": {
+        "rule": {
+          "type": "string",
+          "description": "pack manifest 登錄的規則 id；模型自帶規則一律拒絕（policy_denied）"
+        }
+      }
+    },
+    "submit_witness_spec": {
+      "type": "object",
+      "description": "輸入即 WitnessSpec 本體；真實驗證在閘內以 witness_spec.schema.json 綁定（§18.1 閘 b）"
+    }
+  }
+}

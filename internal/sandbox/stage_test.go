@@ -3,9 +3,13 @@ package sandbox
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestValidateStageName：staging 相對路徑閉集（§22 adversarial：路徑形狀）。
@@ -89,6 +93,44 @@ func TestStageTarRejects(t *testing.T) {
 		if _, err := stageTar(files, []byte("p")); err == nil {
 			t.Errorf("%s：應被拒收", name)
 		}
+	}
+}
+
+// fakeDockerBin 寫出一個替代 docker 執行檔的腳本（r.Bin），讓 cpTarStdin 的
+// 取消／逾時行為可在無 docker 環境測試（§22：flags 測試必須仍全過）。
+func fakeDockerBin(t *testing.T, body string) *Runner {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("寫 fake docker 失敗：%v", err)
+	}
+	return &Runner{Bin: path}
+}
+
+// TestCpTarStdinCancelHonored：cpTarStdin 必須接受 ctx——取消後立即終止 docker cp
+// 子程序（P2-2 adversarial：舊實作 exec.Command 無 context，取消路徑完全失效）。
+func TestCpTarStdinCancelHonored(t *testing.T) {
+	r := fakeDockerBin(t, "cat >/dev/null\nsleep 60\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	start := time.Now()
+	err := r.cpTarStdin(ctx, "cid", "/stage", []byte("tar-bytes"))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("取消後 cpTarStdin 應回錯誤，卻成功返回")
+	}
+	if elapsed > 15*time.Second {
+		t.Fatalf("取消後 cpTarStdin 耗時 %v：取消未即時終止 docker cp", elapsed)
+	}
+}
+
+// TestCpTarStdinHappyPath：取消路徑之外，正常注入仍應成功（fake docker 消費 stdin
+// 後 exit 0）；無 deadline 時 cpTarStdin 自套逾時（§17.1 host 端強制）。
+func TestCpTarStdinHappyPath(t *testing.T) {
+	r := fakeDockerBin(t, "cat >/dev/null\n")
+	if err := r.cpTarStdin(context.Background(), "cid", "/stage", []byte("tar-bytes")); err != nil {
+		t.Fatalf("cpTarStdin 正常路徑失敗：%v", err)
 	}
 }
 

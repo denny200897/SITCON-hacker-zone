@@ -272,7 +272,7 @@ func checkPackImages(ctx context.Context, o Options, bin, dir string, pack *pack
 		}
 		// 2) images.json 已記錄（§17.10 解析序第 3 階；本機缺映像時 policy
 		//    仍以記錄的 digest 定址，此處不算失敗、也不重複構建）。
-		if d := cache[ref]; d != "" {
+		if d := cache[ref]; d != "" && imageExistsFn(ctx, bin, d) {
 			notes = append(notes, fmt.Sprintf("%s 已記錄於 images.json（免構建）", shortRef(ref)))
 			continue
 		}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aegis-dev/aegis/internal/llm"
+	"github.com/aegis-dev/aegis/internal/redaction"
 )
 
 // ---- 角色工具白名單（§18.1 閉集） ----
@@ -74,21 +75,31 @@ func OpenAuditLog(runDir string) (*AuditLog, error) {
 	return &AuditLog{f: f}, nil
 }
 
-// Append 記錄一筆；寫入失敗不影響工具執行結果（audit 盡力而為）。
-func (a *AuditLog) Append(role llm.Role, tool string, args json.RawMessage, d AuditDecision, reason string) {
-	if a == nil {
-		return
+// Append records and flushes one entry. Audit is a security boundary: callers
+// must fail closed when this method returns an error.
+func (a *AuditLog) Append(role llm.Role, tool string, args json.RawMessage, d AuditDecision, reason string) error {
+	if a == nil || a.f == nil {
+		return fmt.Errorf("agent: audit log unavailable")
 	}
 	if args == nil {
 		args = json.RawMessage("null")
+	}
+	if redaction.HasSecret(string(args)) || redaction.HasSecret(reason) {
+		return fmt.Errorf("agent: audit persistence denied by secret gate")
 	}
 	e := AuditEntry{Ts: time.Now().UTC().Format(time.RFC3339Nano), Role: string(role),
 		Tool: tool, Args: args, Decision: d, Reason: reason}
 	b, err := json.Marshal(e)
 	if err != nil {
-		return
+		return fmt.Errorf("agent: encode audit entry: %w", err)
 	}
-	_, _ = a.f.Write(append(b, '\n'))
+	if _, err := a.f.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("agent: write audit entry: %w", err)
+	}
+	if err := a.f.Sync(); err != nil {
+		return fmt.Errorf("agent: sync audit entry: %w", err)
+	}
+	return nil
 }
 
 // Close 關閉檔案。

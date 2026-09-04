@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,9 @@ func TestLoadMalformedErr(t *testing.T) {
 // saveUserMode：使用者層級檔權限必須為 0600（§3.3 credentials 同款 restrictive
 // 慣例；此檔可能與憑證同目錄，測試鎖定）。
 func TestSaveUserMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX mode bits")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "aegis", "settings.toml")
 	if err := SaveUser(path, testConfig()); err != nil {
@@ -207,6 +211,9 @@ func TestDefaultUserDirRespectsXDG(t *testing.T) {
 
 // defaultUserDirHome：XDG 未設時退回 ~/.config（§3.3 固定路徑）。
 func TestDefaultUserDirFallsBackToHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.UserHomeDir uses the Windows profile API")
+	}
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", "/home/aegis-test")
 

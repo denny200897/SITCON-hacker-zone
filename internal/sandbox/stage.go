@@ -21,7 +21,6 @@ import (
 	"os/exec"
 	"path"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -156,13 +155,7 @@ func (r *Runner) cpTarStdin(ctx context.Context, cid, dest string, tarBytes []by
 	// processes).  Killing only the direct process leaves descendants holding
 	// stdin/stderr open, so Wait can block until the host timeout.  Give the
 	// command its own process group and terminate the whole group on cancel.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	configureProcessCancellation(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

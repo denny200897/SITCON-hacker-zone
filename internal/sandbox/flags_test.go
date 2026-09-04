@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -16,6 +17,9 @@ func digestImg(name string) string {
 // TestDockerArgsCanonicalFlagSet 逐項斷言 §17.1 canonical run flags（§22 M0a：
 // hardening 每條 flag 有 unit test）。
 func TestDockerArgsCanonicalFlagSet(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX host path")
+	}
 	req := RunSpec{
 		RunID:      "R-0001",
 		SnapshotID: "SNAP-0001",
@@ -150,6 +154,9 @@ func indexOf(args []string, s string) int {
 
 // TestDockerArgsSSRFNetwork：ssrf-internal → network 名固定 aegis-ssrf-<run_id>（§17.5-1）。
 func TestDockerArgsSSRFNetwork(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX host path")
+	}
 	req := RunSpec{
 		RunID: "R-0042", SnapshotID: "SNAP-0042",
 		Image: digestImg("aegis/python-web"), Cmd: []string{"true"},
@@ -234,6 +241,9 @@ func TestDockerArgsRejectsBadInput(t *testing.T) {
 
 // TestDockerArgsEnvPassthrough：合法 KEY=VALUE 逐項以 --env 注入，順序保持。
 func TestDockerArgsEnvPassthrough(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX host path")
+	}
 	req := RunSpec{
 		RunID: "R-0001", SnapshotID: "SNAP-0001", Image: digestImg("busybox"),
 		Cmd: []string{"true"}, Network: NetworkNone, Seccomp: "/h/seccomp.json",
@@ -265,6 +275,9 @@ func TestDockerArgsEnvPassthrough(t *testing.T) {
 
 // TestDockerArgsCmdPassthrough：cmd 原樣附在映像之後（exec 呼叫、無 shell）。
 func TestDockerArgsCmdPassthrough(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX host path")
+	}
 	req := RunSpec{
 		RunID: "R-0001", SnapshotID: "SNAP-0001", Image: digestImg("busybox"),
 		Cmd: []string{"sh", "-c", "echo hi"}, Network: NetworkNone,
@@ -286,6 +299,9 @@ func TestDockerArgsCmdPassthrough(t *testing.T) {
 
 // TestDockerArgsNoWritableHostMount：參數閉集不得出現可寫 bind mount 或 docker socket。
 func TestDockerArgsNoWritableHostMount(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses a POSIX host path")
+	}
 	req := RunSpec{
 		RunID: "R-0001", SnapshotID: "SNAP-0001", Image: digestImg("busybox"),
 		Cmd: []string{"true"}, Network: NetworkNone, Seccomp: "/h/seccomp.json", TimeoutSec: 60,

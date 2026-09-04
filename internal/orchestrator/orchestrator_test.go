@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -119,6 +120,11 @@ func TestNewNonce(t *testing.T) {
 
 // TestASTCheck：module/class/method 的靜態解析（§17.9-2）。
 func TestASTCheck(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		if _, err := exec.LookPath("python"); err != nil {
+			t.Skip("Python interpreter unavailable")
+		}
+	}
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("class UserRepo:\n    def find_by_name(self, name):\n        pass\n"), 0o644); err != nil {
 		t.Fatal(err)

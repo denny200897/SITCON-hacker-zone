@@ -4,10 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
 func TestRunParsesOnlyQualifiedSemgrepHits(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable")
+	}
 	d := t.TempDir()
 	script := filepath.Join(d, "semgrep")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s' '{\"results\":[{\"path\":\"app.py\",\"start\":{\"line\":7},\"extra\":{\"match\":\"db.execute(x)\",\"message\":\"SQL\",\"metadata\":{\"aegis_family\":\"sqli\",\"aegis_sink_type\":\"sql.concat\"}}},{\"path\":\"x.py\",\"start\":{\"line\":0},\"extra\":{}}]}'\n"), 0o755); err != nil {

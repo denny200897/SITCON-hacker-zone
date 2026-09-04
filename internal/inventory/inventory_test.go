@@ -88,16 +88,16 @@ def load_config():
 
 func TestIsExcluded(t *testing.T) {
 	cases := map[string]bool{
-		".git/config":            true,
-		".env":                   true,
-		"app/.env":               true,
-		"venv/lib/x.py":          true,
-		"app/__pycache__/a.pyc":  true,
-		"server.pem":             true,
-		"id_rsa":                 true,
-		"app/db.py":              false,
-		"requirements.txt":       false,
-		"venvsomething/x.py":     false, // 前綴命中不算——元件比對
+		".git/config":           true,
+		".env":                  true,
+		"app/.env":              true,
+		"venv/lib/x.py":         true,
+		"app/__pycache__/a.pyc": true,
+		"server.pem":            true,
+		"id_rsa":                true,
+		"app/db.py":             false,
+		"requirements.txt":      false,
+		"venvsomething/x.py":    false, // 前綴命中不算——元件比對
 	}
 	for rel, want := range cases {
 		if got := IsExcluded(rel); got != want {
@@ -108,12 +108,12 @@ func TestIsExcluded(t *testing.T) {
 
 func TestBuildSkipsExcluded(t *testing.T) {
 	root := writeRepo(t, map[string]string{
-		"app.py":                 "x = 1\n",
-		".env":                   "SECRET=1\n",
-		"server.key":             "k\n",
-		"__pycache__/a.pyc":      "x",
-		"venv/lib/x.py":          "y = 2\n",
-		".git/hooks/pre-commit":  "#!/bin/sh\n",
+		"app.py":                "x = 1\n",
+		".env":                  "SECRET=1\n",
+		"server.key":            "k\n",
+		"__pycache__/a.pyc":     "x",
+		"venv/lib/x.py":         "y = 2\n",
+		".git/hooks/pre-commit": "#!/bin/sh\n",
 	})
 	inv, err := Build(root)
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSymlinkNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(external, filepath.Join(root, "leak.py")); err != nil {
-		t.Fatal(err)
+		t.Skipf("host cannot create symlinks: %v", err)
 	}
 	inv, err := Build(root)
 	if err != nil {

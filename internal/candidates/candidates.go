@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 )
 
 type Candidate struct {
@@ -91,4 +92,51 @@ func symbolFor(path string) string {
 		base = base[:len(base)-len(ext)]
 	}
 	return base
+}
+
+// Merge combines candidates produced by every configured detector. Hits for
+// the same sink type within five lines are one finding; provenance is retained
+// and IDs are reassigned deterministically.
+func Merge(groups ...[]Candidate) []Candidate {
+	all := make([]Candidate, 0)
+	for _, group := range groups {
+		all = append(all, group...)
+	}
+	sort.SliceStable(all, func(i, j int) bool {
+		if all[i].Sink.File != all[j].Sink.File {
+			return all[i].Sink.File < all[j].Sink.File
+		}
+		if all[i].Sink.Type != all[j].Sink.Type {
+			return all[i].Sink.Type < all[j].Sink.Type
+		}
+		return all[i].Sink.Line < all[j].Sink.Line
+	})
+	merged := make([]Candidate, 0, len(all))
+	for _, hit := range all {
+		if len(merged) > 0 {
+			last := &merged[len(merged)-1]
+			if last.Sink.File == hit.Sink.File && last.Sink.Type == hit.Sink.Type && hit.Sink.Line-last.Sink.Line <= 5 {
+				for _, source := range hit.Sources {
+					if !hasSource(last.Sources, source) {
+						last.Sources = append(last.Sources, source)
+					}
+				}
+				continue
+			}
+		}
+		merged = append(merged, hit)
+	}
+	for i := range merged {
+		merged[i].ID = fmt.Sprintf("C-%04d", i+1)
+	}
+	return merged
+}
+
+func hasSource(sources []Source, want Source) bool {
+	for _, source := range sources {
+		if source == want {
+			return true
+		}
+	}
+	return false
 }

@@ -126,9 +126,13 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 
 	// pendingSpec 由閘 (b) 核可後填入；session 結束後由迴圈取出。
 	var pendingSpec map[string]any
+	var fatalJournalErr error
 	ap.Tools.OnSubmit = func(_ context.Context, spec map[string]any, assistantText string) (bool, string) {
 		if err := ap.checkSpec(spec, assistantText, feedbackSeen, seenHashes); err != nil {
-			ap.journalSpecRejected(err.reason)
+			if appendErr := ap.journalSpecRejected(err.reason); appendErr != nil {
+				fatalJournalErr = appendErr
+				return false, "journal write failed (fail-closed)"
+			}
 			return false, err.feedback
 		}
 		seenHashes[specHash(spec)] = true
@@ -151,8 +155,11 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 		}
 
 		ap.Tools.ResetSession()
-		runtime := &agent.Runtime{Adapter: ap.Adapter, Tools: ap.Tools, MaxTurns: ap.sessionTurns()}
+		runtime := &agent.Runtime{Adapter: ap.Adapter, Tools: ap.Tools, MaxTurns: ap.sessionTurns(), StopOnAccepted: true}
 		resp, history, err := runtime.Run(ctx, ap.chatRequest(msgs))
+		if fatalJournalErr != nil {
+			return nil, fmt.Errorf("orchestrator: rejected-spec journal: %w", fatalJournalErr)
+		}
 		if err != nil {
 			// LLM／transport 失敗（§19 第 0 點）→ env；fresh 輪直接進終態。
 			rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotRun),
@@ -330,7 +337,9 @@ func (ap *AgentProver) terminal(v domain.Verification, reason domain.NotProvenRe
 		res.Scope = ap.scope()
 		res.Rationale = rationaleLines(learned, attempts)
 	}
-	ap.journalVerification(res)
+	if err := ap.journalVerification(res); err != nil {
+		return nil, fmt.Errorf("orchestrator: terminal journal: %w", err)
+	}
 	return res, nil
 }
 
@@ -347,9 +356,9 @@ func (ap *AgentProver) stopResult(stop *budget.Stop, attempts []AttemptRecord,
 
 // journalVerification 落 verification_updated（NOT_PROVEN 附嘗試日誌；
 // HYPOTHESIS_REJECTED 附 scope 與逐條 rationale，§9.3）。
-func (ap *AgentProver) journalVerification(res *AgentProveResult) {
+func (ap *AgentProver) journalVerification(res *AgentProveResult) error {
 	if ap.Journal == nil {
-		return
+		return fmt.Errorf("journal unavailable")
 	}
 	doc := map[string]any{
 		"verification":  string(res.Verification),
@@ -368,7 +377,8 @@ func (ap *AgentProver) journalVerification(res *AgentProveResult) {
 	}
 	doc["budget"] = map[string]any{"max_env": ap.Budget.MaxEnv, "max_harness": ap.Budget.MaxHarness,
 		"max_hypotheses": ap.Budget.MaxHypotheses}
-	_, _ = ap.Journal.Append("verification_updated", ap.Finding.FindingID, doc)
+	_, err := ap.Journal.Append("verification_updated", ap.Finding.FindingID, doc)
+	return err
 }
 
 // ---- 閘 (b)：submit_witness_spec 的迴圈級檢查（§18.1；schema 驗證由呼叫端注入） ----
@@ -401,11 +411,12 @@ func (ap *AgentProver) checkSpec(spec map[string]any, assistantText string,
 }
 
 // journalSpecRejected 落 witness_spec_rejected 事件。
-func (ap *AgentProver) journalSpecRejected(reason string) {
+func (ap *AgentProver) journalSpecRejected(reason string) error {
 	if ap.Journal == nil {
-		return
+		return fmt.Errorf("journal unavailable")
 	}
-	_, _ = ap.Journal.Append("witness_spec_rejected", ap.Finding.FindingID, map[string]any{"reason": reason})
+	_, err := ap.Journal.Append("witness_spec_rejected", ap.Finding.FindingID, map[string]any{"reason": reason})
+	return err
 }
 
 // ---- prompt 組裝（§18.4） ----

@@ -190,7 +190,7 @@ func TestCreateSymlinkNotFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(repo, "link.txt")); err != nil {
-		t.Fatal(err)
+		t.Skipf("host cannot create symlinks: %v", err)
 	}
 	// repo 內相對 symlink 也要原樣保留。
 	if err := os.WriteFile(filepath.Join(repo, "target.txt"), []byte("inside"), 0o644); err != nil {

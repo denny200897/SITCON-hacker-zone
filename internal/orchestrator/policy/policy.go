@@ -33,6 +33,7 @@ const (
 	ReasonDuplicateSpec           = "duplicate_spec"
 	ReasonEmptyPayload            = "empty_payload"
 	ReasonOversizeFiles           = "oversize_files"
+	ReasonBadWiring               = "bad_wiring"
 )
 
 // reasons 是 Reason 閉集（§21.2 精神：集合成員檢查，防止拼字錯誤流入訊息）。
@@ -50,6 +51,7 @@ var reasons = map[string]bool{
 	ReasonDuplicateSpec:           true,
 	ReasonEmptyPayload:            true,
 	ReasonOversizeFiles:           true,
+	ReasonBadWiring:               true,
 }
 
 // SpecError 是 prover 可收到的拒收原因（§18.2 回饋會引用）。
@@ -81,6 +83,7 @@ var reasonText = map[string]string{
 	ReasonDuplicateSpec:           "與先前已提交的 spec 內容 hash 相同",
 	ReasonEmptyPayload:            "payload 必填且不得為空",
 	ReasonOversizeFiles:           "generated_files 內容總大小超過 256KiB",
+	ReasonBadWiring:               "wiring 不符規範（setup 為 {method, args: JSON 字面值} 陣列；method 須為 identifier；≤16 筆、序列化後 ≤4KiB）",
 }
 
 func specErr(reason string) *SpecError { return &SpecError{Reason: reason} }
@@ -154,10 +157,22 @@ const (
 	// PayloadMax 是 payload 上限（§17.9-4：2KiB）。
 	PayloadMax = 2048
 	// FilesMax 與 FilesBytesMax 是 generated_files 的檔數與總大小上限（§17.9-3）。
-	FilesMax       = 8
-	FilesBytesMax  = 256 * 1024
-	FilesPrefix    = "witness/"
-	DirectFileName = "witness/exploit.py" // direct 模式僅允許 exploit 腳本（§17.8）
+	FilesMax      = 8
+	FilesBytesMax = 256 * 1024
+	FilesPrefix   = "witness/"
+	// DirectFileName 是 direct 模式唯一允許的檔（§17.8）。
+	DirectFileName = "witness/exploit.py"
+
+	// WiringCallsMax 與 WiringBytesMax 是 wiring（ADR 0005）的筆數與序列化大小上限；
+	// BindingFileKey 是 policy 編譯出的 target binding 在 RunRequest.target.files 的鍵。
+	WiringCallsMax = 16
+	WiringBytesMax = 4096
+	BindingFileKey = "target/binding.json"
+
+	// DriverNetwork 與 TargetNetAlias 是雙容器切分的固定網路拓撲（ADR 0005）：
+	// driver network 名由 sandbox 組（aegis-driver-<runID>）；T 以 alias 被 W 呼叫。
+	DriverNetwork  = "driver-internal"
+	TargetNetAlias = "target"
 )
 
 // nonce placeholders（§17.2；兩者語意相同）。
@@ -281,8 +296,138 @@ func Compile(in Input, nonce string) (map[string]any, error) {
 		return nil, specErr(ReasonDuplicateSpec)
 	}
 
+	// wiring（ADR 0005）：宣告式 target 接線，僅在 observer-backed（雙容器切分）時
+	// 編譯成 target/binding.json——模型端只提供資料，執行碼由 pack 的
+	// target_harness.py 解析；單容器路徑不需要 binding（service cmd 已足夠）。
+	var binding string
+	if tmpl.ObserverImage != "" {
+		b, berr := buildBinding(targetSymbol, in.Spec["wiring"], nonce, in.SecretScan)
+		if berr != nil {
+			return nil, berr
+		}
+		binding = b
+	}
+
 	// §17.2：nonce 統一替換（payload 與 generated_files 內容；鍵不含 placeholder）
-	return assemble(in, tmpl, files, payload, kind, nonce), nil
+	return assemble(in, tmpl, files, payload, kind, nonce, binding), nil
+}
+
+// validWiringLiteral 檢查 wiring arg 為 JSON 字面值：字串／數字／布林／null／
+// 純陣列（可巢狀陣列）。物件一律拒收——wiring 只描述資料，不含任何結構化
+// 可執行形狀（ADR 0005：模型端不提供執行碼）。
+func validWiringLiteral(v any) bool {
+	switch t := v.(type) {
+	case nil, bool, float64, string, int, int64:
+		return true
+	case []any:
+		for _, e := range t {
+			if !validWiringLiteral(e) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+// identifierRe 檢查 wiring method 名為 Python identifier（與 ASTCheck 的符號段一致）。
+var identifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// nonceLiteral 遞迴對字面值內所有字串做 §17.2 nonce 替換（§17.2：wiring args
+// 允許 placeholder，與 payload／generated_files 同規則）。
+func nonceLiteral(v any, nonce string) any {
+	switch t := v.(type) {
+	case string:
+		return replaceNonce(t, nonce)
+	case []any:
+		out := make([]any, len(t))
+		for i, e := range t {
+			out[i] = nonceLiteral(e, nonce)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// buildBinding 把 target_symbol＋wiring 編譯成 target/binding.json 內容。
+// 驗證失敗回 *SpecError（ReasonBadWiring／ReasonSecretInSpec）；輸出為
+// {"module","class","method","setup":[{"method","args":[字面值]}]}，args 內
+// 已做 §17.2 nonce 替換。整份序列化 ≤ WiringBytesMax。
+func buildBinding(targetSymbol string, rawWiring any, nonce string, secretScan func(string) bool) (string, error) {
+	segs := strings.Split(targetSymbol, ".")
+	if len(segs) < 2 {
+		return "", specErr(ReasonBadWiring)
+	}
+	method := segs[len(segs)-1]
+	class := segs[len(segs)-2]
+	module := strings.Join(segs[:len(segs)-2], ".")
+	// module 可為多層點路徑；每段須為 identifier（class／method 單段）。
+	for _, seg := range segs {
+		if !identifierRe.MatchString(seg) {
+			return "", specErr(ReasonBadWiring)
+		}
+	}
+
+	setup := []any{}
+	if rawWiring != nil {
+		w, ok := rawWiring.(map[string]any)
+		if !ok {
+			return "", specErr(ReasonBadWiring)
+		}
+		rawSetup, ok := w["setup"].([]any)
+		if !ok {
+			// wiring 物件存在但無 setup：視為空接線（允許；其他鍵 schema 已擋）。
+			if len(w) == 0 {
+				rawSetup = nil
+			} else {
+				return "", specErr(ReasonBadWiring)
+			}
+		}
+		if len(rawSetup) > WiringCallsMax {
+			return "", specErr(ReasonBadWiring)
+		}
+		for _, item := range rawSetup {
+			call, ok := item.(map[string]any)
+			if !ok {
+				return "", specErr(ReasonBadWiring)
+			}
+			m, ok := call["method"].(string)
+			if !ok || !identifierRe.MatchString(m) {
+				return "", specErr(ReasonBadWiring)
+			}
+			rawArgs, ok := call["args"].([]any)
+			if !ok {
+				return "", specErr(ReasonBadWiring)
+			}
+			args := make([]any, 0, len(rawArgs))
+			for _, a := range rawArgs {
+				if !validWiringLiteral(a) {
+					return "", specErr(ReasonBadWiring)
+				}
+				args = append(args, nonceLiteral(a, nonce))
+			}
+			setup = append(setup, map[string]any{"method": m, "args": args})
+		}
+	}
+	// 金鑰掃描（§17.9-5）：wiring 是模型輸入，與 payload／files 同等對待。
+	if rawWiring != nil {
+		if b, err := evidence.CanonicalBytes(rawWiring); err == nil && secretScan(string(b)) {
+			return "", specErr(ReasonSecretInSpec)
+		}
+	}
+	doc := map[string]any{
+		"module": module, "class": class, "method": method, "setup": setup,
+	}
+	b, err := evidence.CanonicalBytes(doc)
+	if err != nil {
+		return "", fmt.Errorf("policy: 編譯 target binding: %w", err)
+	}
+	if len(b) > WiringBytesMax {
+		return "", specErr(ReasonBadWiring)
+	}
+	return string(b), nil
 }
 
 // validateFiles 依 §17.9-3 檢查 generated_files，回傳通過的 (鍵, 內容) 集合。
@@ -399,7 +544,10 @@ func replaceNonce(s, nonce string) string {
 
 // assemble 組 RunRequest（§5.2／run_request.schema.json；全部欄位由政策決定，
 // 欄位集閉合於 schema 的 additionalProperties:false）。
-func assemble(in Input, tmpl *Template, files [][2]string, payload, kind, nonce string) map[string]any {
+// ObserverImage 非空時啟用雙容器信任切分（ADR 0005）：頂層欄位描述容器 T
+// （trusted side），新增 driver（容器 W：模型產生的 exploit driver）與 target
+// （policy 編譯的 binding，容器 T 專屬注入檔）。
+func assemble(in Input, tmpl *Template, files [][2]string, payload, kind, nonce, binding string) map[string]any {
 	fileMap := make(map[string]any, len(files))
 	for _, kv := range files {
 		fileMap[kv[0]] = replaceNonce(kv[1], nonce)
@@ -441,6 +589,17 @@ func assemble(in Input, tmpl *Template, files [][2]string, payload, kind, nonce 
 	}
 	if observer != nil {
 		out["observer"] = observer
+		// 雙容器切分（ADR 0005）：W 只跑模型檔與 payload，等 T 的 health 就緒；
+		// T 跑 service（witness 模式下是 pack harness）。模型碼與 observer 之間
+		// 無網路路徑，可信事件無法由 W 偽造。
+		out["driver"] = map[string]any{
+			"cmd":        []any{"/aegis/entrypoint.py", "--template", tmpl.TemplateID},
+			"network":    DriverNetwork,
+			"target_url": fmt.Sprintf("http://%s:%d", TargetNetAlias, tmpl.ServicePort),
+		}
+		if binding != "" {
+			out["target"] = map[string]any{"files": map[string]any{BindingFileKey: binding}}
+		}
 	}
 	return out
 }

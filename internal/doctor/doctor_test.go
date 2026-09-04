@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,9 @@ func TestDockerCheckMissingFailsWithDetail(t *testing.T) {
 }
 
 func TestDockerCheckOKViaRealExec(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable")
+	}
 	// 以假 docker script 走真實 os/exec 路徑（§16：docker CLI 以 os/exec 呼叫），
 	// 驗證 `docker version --format …` 的呼叫形狀與版本行擷取。
 	dir := t.TempDir()
@@ -157,6 +161,8 @@ func TestPackCheckPreRecordedImagesJSONNoBuild(t *testing.T) {
 	// images.json 預先記錄 digest → OK、不構建（§17.10 第 3 階記錄在案）。
 	ref := "aegis-python-web@sha256:" + digest64
 	builds := packSeams(t, packWithImage(ref), map[string]string{ref: ref}, false, nil)
+	inspectCalls := 0
+	imageExistsFn = func(context.Context, string, string) bool { inspectCalls++; return inspectCalls > 1 }
 
 	// CachePath 指到 t.TempDir（readImagesJSONFn 已替換，路徑僅作非空判斷）。
 	cachePath := filepath.Join(t.TempDir(), "images.json")

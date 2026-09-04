@@ -102,6 +102,9 @@ func (s *Store) Write(doc map[string]any, id string) (string, string, error) {
 	if err := f.Close(); err != nil {
 		return "", "", fmt.Errorf("evidence: close %s: %w", path, err)
 	}
+	if err := writeBundleManifest(s.dir); err != nil {
+		return "", "", fmt.Errorf("evidence: update bundle manifest: %w", err)
+	}
 	s.prev = h
 	s.count++
 	return id, h, nil
@@ -145,6 +148,95 @@ func VerifyChain(dir string) error {
 		prev = h
 	}
 	return nil
+}
+
+const bundleManifestName = "bundle.manifest.json"
+
+// VerifyBundle anchors the ordered evidence chain to the bundle manifest.
+// Replay must call this before trusting any evidence or artifact metadata.
+func VerifyBundle(dir string) error {
+	if err := VerifyChain(dir); err != nil {
+		return err
+	}
+	wantData, err := os.ReadFile(filepath.Join(dir, bundleManifestName))
+	if err != nil {
+		return fmt.Errorf("evidence: read bundle manifest: %w", err)
+	}
+	want, err := Decode(wantData)
+	if err != nil {
+		return fmt.Errorf("evidence: decode bundle manifest: %w", err)
+	}
+	got, err := buildBundleManifest(dir)
+	if err != nil {
+		return err
+	}
+	wantBytes, err := CanonicalBytes(want)
+	if err != nil {
+		return err
+	}
+	gotBytes, err := CanonicalBytes(got)
+	if err != nil {
+		return err
+	}
+	if string(wantBytes) != string(gotBytes) {
+		return fmt.Errorf("evidence: bundle manifest mismatch")
+	}
+	return nil
+}
+
+func writeBundleManifest(dir string) error {
+	doc, err := buildBundleManifest(dir)
+	if err != nil {
+		return err
+	}
+	b, err := CanonicalBytes(doc)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, bundleManifestName), append(b, '\n'), 0o644)
+}
+
+func buildBundleManifest(dir string) (map[string]any, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("evidence: read bundle: %w", err)
+	}
+	names := []string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "EV-") && strings.HasSuffix(name, ".json") {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	items := make([]any, 0, len(names))
+	tail := ""
+	for index, name := range names {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		doc, err := Decode(data)
+		if err != nil {
+			return nil, err
+		}
+		id, _ := doc["id"].(string)
+		if id+".json" != name || id != fmt.Sprintf("EV-%04d", index+1) {
+			return nil, fmt.Errorf("evidence: non-contiguous evidence sequence at %s", name)
+		}
+		hash, err := Hash(doc)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{"id": id, "hash": hash})
+		tail = hash
+	}
+	rootInput := map[string]any{"evidence": items}
+	root, err := Hash(rootInput)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"version": "aegis-bundle-v1", "evidence": items, "count": int64(len(items)), "tail_hash": tail, "root_hash": root}, nil
 }
 
 // Dir 回傳 evidence 目錄路徑。

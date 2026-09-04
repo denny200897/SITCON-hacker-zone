@@ -11,7 +11,7 @@
     {
       "id": "py/sql/string-concat",
       "path": "detectors/py-sql-concat.yml",
-      "sha256": "5e72598458ad786fbe3fdcbdfc5e8ab2a1cb17184bc9c07d8675b99935cbfead"
+      "sha256": "8c4e4ffed0f80620d1229d39306f86403e8bef1b1b619bd4eeec11d113abf30d"
     }
   ],
   "templates": [
@@ -20,11 +20,11 @@
       "family": "sqli",
       "run_mode": "witness",
       "path": "templates/py-http-endpoint-witness-v3.py",
-      "sha256": "f3249b46d865c6f124eb2fc584f6db95494fa72c2a1944438ec47f9b6a4575d0",
+      "sha256": "6cbeb6ca8ca7e6078e3602f862dac71fbb871d5d43a48c17bfe44c33a6c7db12",
       "allowed_files": [
         ".py"
       ],
-      "service_cmd": "python /aegis/witness/app.py",
+      "service_cmd": "python /aegis/pack/target_harness.py",
       "service_port": 8000,
       "wait_for": "GET /healthz",
       "health_path": "/healthz",
@@ -35,7 +35,7 @@
       "family": "sqli",
       "run_mode": "direct",
       "path": "templates/py-http-endpoint-witness-v3.py",
-      "sha256": "f3249b46d865c6f124eb2fc584f6db95494fa72c2a1944438ec47f9b6a4575d0",
+      "sha256": "6cbeb6ca8ca7e6078e3602f862dac71fbb871d5d43a48c17bfe44c33a6c7db12",
       "allowed_files": [
         ".py"
       ],

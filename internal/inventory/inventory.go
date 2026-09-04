@@ -19,7 +19,7 @@ var DefaultExcludes = []string{
 	"__pycache__",
 	"node_modules",
 	"dist", "build",
-	".aegis",
+	".aegis", "out",
 }
 
 // IsExcluded 判定相對路徑是否被排除：任一層路徑元件命中 exclude 即排除；

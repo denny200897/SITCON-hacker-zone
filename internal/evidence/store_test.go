@@ -35,6 +35,46 @@ func TestStoreChainAndVerify(t *testing.T) {
 	if err := VerifyChain(filepath.Join(dir, "evidence")); err != nil {
 		t.Fatalf("chain verify failed: %v", err)
 	}
+	if err := VerifyBundle(filepath.Join(dir, "evidence")); err != nil {
+		t.Fatalf("bundle verify failed: %v", err)
+	}
+}
+
+func TestBundleManifestDetectsTailDeletionAndAddition(t *testing.T) {
+	for _, mutation := range []string{"tail", "delete", "add"} {
+		t.Run(mutation, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := NewStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := 1; i <= 3; i++ {
+				if _, _, err := store.Write(map[string]any{"kind": "exploit", "n": int64(i)}, fmt.Sprintf("EV-%04d", i)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			evidenceDir := filepath.Join(dir, "evidence")
+			switch mutation {
+			case "tail":
+				path := filepath.Join(evidenceDir, "EV-0003.json")
+				data, _ := os.ReadFile(path)
+				if err := os.WriteFile(path, []byte(strings.Replace(string(data), `"n":3`, `"n":9`, 1)), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "delete":
+				if err := os.Remove(filepath.Join(evidenceDir, "EV-0002.json")); err != nil {
+					t.Fatal(err)
+				}
+			case "add":
+				if err := os.WriteFile(filepath.Join(evidenceDir, "EV-0004.json"), []byte(`{"id":"EV-0004","prev_evidence_hash":null}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := VerifyBundle(evidenceDir); err == nil {
+				t.Fatal("mutated bundle verified")
+			}
+		})
+	}
 }
 
 func TestStoreVerifyDetectsTamper(t *testing.T) {
@@ -131,6 +171,7 @@ func TestRunDirFor(t *testing.T) {
 		t.Fatalf("got %s", d)
 	}
 }
+
 // ---- P2-3 adversarial tests（先寫、先驗證在現行實作上失敗，再修復；docs/acceptance-m0a-m0c.md） ----
 
 // TestStoreWriteRefusesOverwrite：append-only 語意（§5.3）——同 id 不得覆寫既有 EV。
@@ -220,4 +261,3 @@ func TestNewStoreFailsOnCorruptedMiddle(t *testing.T) {
 		t.Fatal("NewStore 接受了中段被篡改的鏈（P2-3：未驗整條 chain）")
 	}
 }
-

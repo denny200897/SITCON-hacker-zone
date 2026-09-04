@@ -44,4 +44,5 @@ def get_user(name):
 if __name__ == "__main__":
     repo = UserRepo()
     repo.seed(["alice", "bob"])
-    app.run(host="127.0.0.1", port=8000)
+    # 0.0.0.0：ADR 0005 切分模式下，driver 容器跨容器呼叫目標服務。
+    app.run(host="0.0.0.0", port=8000)

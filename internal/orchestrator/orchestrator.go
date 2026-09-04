@@ -199,7 +199,11 @@ func ASTCheck(snapshotDir, targetSymbol string) error {
 		return err
 	}
 	defer os.Remove(out)
-	cmd := exec.Command("python3", helper, "--root", snapshotDir, "--symbol", targetSymbol, "--out", out)
+	python := "python3"
+	if _, err := exec.LookPath(python); err != nil {
+		python = "python"
+	}
+	cmd := exec.Command(python, helper, "--root", snapshotDir, "--symbol", targetSymbol, "--out", out)
 	if err := cmd.Run(); err != nil {
 		data, _ := os.ReadFile(out)
 		var v struct {
@@ -284,6 +288,46 @@ func RunRequestToRunSpec(rr map[string]any, snapshotID, seccompPath, snapshotDir
 	if err != nil {
 		return sandbox.RunSpec{}, err
 	}
+	// 雙容器切分（ADR 0005）：driver 欄存在 → RunSpec 描述容器 T（補
+	// AEGIS_ROLE=target），並翻譯容器 W 的建立請求。W 的 env 由 policy 的
+	// driver.target_url 與 service.wait_for 組成——刻意不含 AEGIS_SERVICE_CMD
+	// 與 AEGIS_OBSERVER_ADDR（W 內不得出現 observer 位址或 service 指令）。
+	var driver *sandbox.DriverSpec
+	if rawDriver, ok := rr["driver"].(map[string]any); ok {
+		targetURL, err := reqStr(rawDriver, "target_url")
+		if err != nil {
+			return sandbox.RunSpec{}, err
+		}
+		rawDriverCmd, ok := rawDriver["cmd"].([]any)
+		if !ok || len(rawDriverCmd) == 0 {
+			return sandbox.RunSpec{}, fmt.Errorf("orchestrator: RunRequest.driver.cmd 缺值或非陣列")
+		}
+		driverCmd := make([]string, 0, len(rawDriverCmd))
+		for _, c := range rawDriverCmd {
+			s, ok := c.(string)
+			if !ok || s == "" {
+				return sandbox.RunSpec{}, fmt.Errorf("orchestrator: RunRequest.driver.cmd 含非字串或空項")
+			}
+			driverCmd = append(driverCmd, s)
+		}
+		dnet, err := reqStr(rawDriver, "network")
+		if err != nil {
+			return sandbox.RunSpec{}, err
+		}
+		if dnet != policy.DriverNetwork {
+			return sandbox.RunSpec{}, fmt.Errorf("orchestrator: RunRequest.driver.network 須為 %q，got %q", policy.DriverNetwork, dnet)
+		}
+		denv := []string{"AEGIS_TARGET_URL=" + targetURL, "AEGIS_ROLE=driver"}
+		if svc, ok := rr["service"].(map[string]any); ok {
+			if wf, ok := svc["wait_for"].(string); ok {
+				if hp := parseWaitFor(wf); hp != "" {
+					denv = append(denv, "AEGIS_HEALTH_PATH="+hp)
+				}
+			}
+		}
+		driver = &sandbox.DriverSpec{Cmd: driverCmd, Env: denv}
+		env = append(env, "AEGIS_ROLE=target")
+	}
 	return sandbox.RunSpec{
 		RunID:         runID,
 		SnapshotID:    snapshotID,
@@ -294,7 +338,34 @@ func RunRequestToRunSpec(rr map[string]any, snapshotID, seccompPath, snapshotDir
 		TimeoutSec:    n,
 		Env:           env,
 		ObserverImage: observerImage(rr),
+		Driver:        driver,
 	}, nil
+}
+
+// TargetFiles 取 RunRequest.target.files（policy 編譯的容器 T 專屬注入檔；
+// ADR 0005）。鍵須帶 "target/" 前綴；無 target 欄回 nil（單容器流程）。
+func TargetFiles(rr map[string]any) (sandbox.StageFiles, error) {
+	rawTarget, ok := rr["target"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	rawFiles, ok := rawTarget["files"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	out := sandbox.StageFiles{}
+	for name, content := range rawFiles {
+		s, ok := content.(string)
+		if !ok {
+			return nil, fmt.Errorf("orchestrator: RunRequest.target.files[%q] 非字串", name)
+		}
+		rel := strings.TrimPrefix(name, "target/")
+		if rel == name {
+			return nil, fmt.Errorf("orchestrator: RunRequest.target.files key %q 不帶 %q 前綴", name, "target/")
+		}
+		out[rel] = []byte(s)
+	}
+	return out, nil
 }
 
 func observerImage(rr map[string]any) string {

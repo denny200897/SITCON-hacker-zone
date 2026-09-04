@@ -7,8 +7,11 @@ import (
 	"time"
 )
 
-// StartObserver creates the per-run internal network and starts the trusted
+// StartObserver creates the per-run internal networks and starts the trusted
 // observer sidecar. The sidecar is the only writer of TrustedVolumePrefix.
+// With the ADR 0005 split it also creates the driver network (aegis-driver-<runID>):
+// container T joins both, container W only the driver one, so model-generated
+// code has no route to the observer.
 func (r *Runner) StartObserver(ctx context.Context, runID, image, seccomp string) error {
 	if !idRe.MatchString(runID) {
 		return fmt.Errorf("sandbox: observer runID 非法：%q", runID)
@@ -27,6 +30,9 @@ func (r *Runner) StartObserver(ctx context.Context, runID, image, seccomp string
 			_ = r.StopObserver(runID)
 		}
 	}()
+	if _, stderr, err := r.runCtx(ctx, 30*time.Second, "network", "create", "--internal", DriverNetPrefix+runID); err != nil {
+		return wrapErr("driver network create", stderr, err)
+	}
 	if _, stderr, err := r.runCtx(ctx, 30*time.Second, "volume", "create", TrustedVolumePrefix+runID); err != nil {
 		return wrapErr("observer volume create", stderr, err)
 	}
@@ -45,7 +51,8 @@ func (r *Runner) StartObserver(ctx context.Context, runID, image, seccomp string
 	return nil
 }
 
-// StopObserver removes the sidecar and trusted volume/network.
+// StopObserver removes the sidecar and the trusted volume plus both per-run
+// internal networks (observer and driver, ADR 0005).
 func (r *Runner) StopObserver(runID string) error {
 	if !idRe.MatchString(runID) {
 		return fmt.Errorf("sandbox: observer runID 非法：%q", runID)
@@ -57,8 +64,28 @@ func (r *Runner) StopObserver(runID string) error {
 	if err := r.removeVolumeRetry(TrustedVolumePrefix + runID); err != nil && first == nil {
 		first = err
 	}
-	if _, stderr, err := r.runTimeout(30*time.Second, "network", "rm", SSRFNetPrefix+runID); err != nil && !strings.Contains(strings.ToLower(string(stderr)), "no such network") && first == nil {
-		first = wrapErr("observer network rm", stderr, err)
+	for _, net := range []string{SSRFNetPrefix + runID, DriverNetPrefix + runID} {
+		if _, stderr, err := r.runTimeout(30*time.Second, "network", "rm", net); err != nil && !strings.Contains(strings.ToLower(string(stderr)), "no such network") && first == nil {
+			first = wrapErr("observer network rm", stderr, err)
+		}
 	}
 	return first
+}
+
+// ConnectTargetNetwork attaches a created (not yet started) container to the
+// per-run driver network with the fixed target alias (ADR 0005): container W
+// reaches the trusted side only through this alias, and docker create accepts a
+// single --network, so the second network is connected explicitly.
+func (r *Runner) ConnectTargetNetwork(ctx context.Context, runID, cid string) error {
+	if !idRe.MatchString(runID) {
+		return fmt.Errorf("sandbox: ConnectTargetNetwork 的 runID 非法：%q", runID)
+	}
+	if cid == "" {
+		return fmt.Errorf("sandbox: ConnectTargetNetwork 的 cid 為空")
+	}
+	_, stderr, err := r.runCtx(ctx, 30*time.Second, "network", "connect", "--alias", "target", DriverNetPrefix+runID, cid)
+	if err != nil {
+		return wrapErr("network connect", stderr, err)
+	}
+	return nil
 }

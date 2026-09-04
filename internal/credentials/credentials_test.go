@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -18,9 +19,9 @@ func fakeEnviron(env map[string]string) func(string) string {
 //（§3.3 退回檔案模式的觸發條件），也確保測試永不觸碰真實 OS keychain。
 type failingKeyring struct{ err error }
 
-func (f failingKeyring) Get(string, string) (string, error)  { return "", f.err }
-func (f failingKeyring) Set(string, string, string) error    { return f.err }
-func (f failingKeyring) Delete(string, string) error         { return f.err }
+func (f failingKeyring) Get(string, string) (string, error) { return "", f.err }
+func (f failingKeyring) Set(string, string, string) error   { return f.err }
+func (f failingKeyring) Delete(string, string) error        { return f.err }
 
 // TestEnvVarNameNormalization 驗 §3.3 正規化：非英數字元一律轉 '_' 後全大寫，
 // 前綴 AEGIS_、後綴 _API_KEY（spec 例：my-openrouter → AEGIS_MY_OPENROUTER_API_KEY）。
@@ -170,6 +171,9 @@ func TestMemoryKeyringSetGetDelete(t *testing.T) {
 // TestFileStorePermissionAndFormat 驗 §3.3：credentials.toml 權限 0600
 //（Set 與 Delete 之後都是；放寬過的權限也會被收回）、檔案格式為 [keys] 表。
 func TestFileStorePermissionAndFormat(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX mode bits")
+	}
 	path := filepath.Join(t.TempDir(), "credentials.toml")
 	fs := &FileStore{Path: path}
 	if err := fs.Set("my-openrouter", "tok-1"); err != nil {

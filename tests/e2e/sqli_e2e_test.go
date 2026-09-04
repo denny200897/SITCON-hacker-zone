@@ -1,6 +1,6 @@
 // Package e2e：M0b 決定性 SQLi E2E（SPEC §22）。
 // 全程真容器：snapshot → pack → policy → sandbox 三控制 run → oracle → evidence 鏈 →
-// replay ×2 一致性；外加「stdout 印 nonce 不為證據」的偽造測試。
+// replay ×2 一致性；外加 adversarial observer 偽造封鎖測試（review P0-01、ADR 0005）。
 // docker 不可用或 pack 映像缺本地 digest 時 skip（§7.1：無本機 fallback，但不讓測試誤報）。
 package e2e
 
@@ -132,41 +132,13 @@ func setupE2E(t *testing.T) (*orchestrator.Prover, string) {
 }
 
 // sqliWitnessSpec：手寫 WitnessSpec（M0b 決定性；M0c 起由 agent 迴圈產生）。
-// witness 模式：import 原碼（/target 唯讀）、最小 wiring、exploit 從 /aegis/payload.txt 讀。
+// ADR 0005 雙容器切分：witness 模式下模型只提供 exploit driver（打 trusted side
+// harness 的 /c/ 面）與宣告式 wiring（seed 接線）；目標程式的服務由 pack 的
+// target_harness.py 承接，模型碼與 observer 無網路路徑。
 func sqliWitnessSpec(t *testing.T) map[string]any {
 	t.Helper()
-	appPy := `# witness app：import 原碼（唯讀掛載）＋最小 wiring（§2.2）
-import os
-import sys
-
-sys.path.insert(0, "/target")
-
-from app import UserRepo
-
-from flask import Flask
-
-PORT = int(os.environ.get("AEGIS_SERVICE_PORT", "8000"))
-_repo = UserRepo()
-_repo.seed(["alice", "bob"])
-
-app = Flask(__name__)
-
-
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-
-@app.get("/users/<name>")
-def get_user(name):
-    rows = _repo.find_by_name(name)
-    return {"users": [r[1] for r in rows]}
-
-
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=PORT)
-`
-	exploitPy := `# exploit driver：從 /aegis/payload.txt 讀 payload（不自行硬編，§2.2）
+	exploitPy := `# exploit driver：從 /aegis/payload.txt 讀 payload（不自行硬編，§2.2）；
+# 目標是 trusted side harness 的 /c/ 面（ADR 0005）。
 import os
 import urllib.parse
 import urllib.request
@@ -174,7 +146,7 @@ import urllib.request
 with open("/aegis/payload.txt", encoding="utf-8") as f:
     payload = f.read().strip()
 base = os.environ["AEGIS_TARGET_URL"]
-url = f"{base}/users/{urllib.parse.quote(payload, safe='')}"
+url = base + "/c/" + urllib.parse.quote(payload, safe="")
 try:
     with urllib.request.urlopen(url, timeout=10) as r:
         print("status", r.status)
@@ -188,11 +160,15 @@ except Exception as exc:
 		"run_mode":      "witness",
 		"payload":       "{{NONCE}}'",
 		"target_symbol": "app.UserRepo.find_by_name",
+		"wiring": map[string]any{
+			"setup": []any{
+				map[string]any{"method": "seed", "args": []any{[]any{"alice", "bob"}}},
+			},
+		},
 		"assumptions": []any{
 			"UserRepo.find_by_name 以 f-string 將 name 串接進 SQL（error-based SQLi）",
 		},
 		"generated_files": map[string]any{
-			"witness/app.py":     appPy,
 			"witness/exploit.py": exploitPy,
 		},
 	}
@@ -245,49 +221,44 @@ func TestM0bSqliProvenE2E(t *testing.T) {
 	e2eVerifyChainAndReplay(t, prover.Pack, prover.RunDir, res)
 }
 
-// TestM0bStdoutNonceNotEvidence：容器 stdout 印出 nonce 與假成功字樣，但未觸發
-// 真漏洞條件 → 不得 PROVEN（§22 M0b：stdout 永不為成功證據）。
-// 偽造 witness 以參數化查詢執行（nonce 不進 SQL 文字）→ paired touch rule 未命中
-// → positive 控制點失敗。依 §17.7：「正對照通過後的 miss 才能計為反證」——
-// harness 控制點不通時的終態是 NOT_PROVEN（harness），不是 HYPOTHESIS_REJECTED；
-// 兩者皆非 PROVEN，stdout 的假成功標記無效。
-func TestM0bStdoutNonceNotEvidence(t *testing.T) {
+// TestM0bObserverForgeryBlockedE2E（review P0-01 驗收）：adversarial witness
+// 從不呼叫 target symbol——改為 (a) 直接對 observer:8787 進行 TCP 連線，企圖
+// 假造含 nonce 的 trace 事件；(b) 把假 trace 寫進 /aegis/out/sql_trace.jsonl；
+// (c) stdout 印 "PROVEN"。雙容器切分（ADR 0005）下，W 沒有到 observer 網路的
+// 路由、/aegis/out 是 tmpfs（不會被收回），可信 trace 只能由真實執行目標碼的
+// 容器 T 產生——未觸發 sink 即無 nonce 進 SQL → positive 控制點失敗 →
+// 終態不得為 PROVEN（§22：偽造必須不可重現 PROVEN）。
+func TestM0bObserverForgeryBlockedE2E(t *testing.T) {
 	prover, findingID := setupE2E(t)
 	spec := sqliWitnessSpec(t)
-	// 惡意/偽造 witness：只印 nonce 與 "PROVEN"，SQL 以參數化查詢執行（無 error）。
+	// 移除 wiring：目標 seed 不執行；witness 換成純偽造驅動（不打 /c/）。
+	delete(spec, "wiring")
 	spec["generated_files"] = map[string]any{
-		"witness/app.py": `import os, sys
-sys.path.insert(0, "/target")
-from app import UserRepo
-from flask import Flask
+		"witness/exploit.py": `# adversarial driver：不呼叫 target symbol，直接偽造可信事件（P0-01 攻擊面）。
+import json
+import os
+import socket
 
-PORT = int(os.environ.get("AEGIS_SERVICE_PORT", "8000"))
-_repo = UserRepo()
-_repo.seed(["alice", "bob"])
-app = Flask(__name__)
-
-@app.get("/healthz")
-def healthz():
-    return {"ok": True}
-
-@app.get("/users/<name>")
-def get_user(name):
-    # 參數化查詢（無漏洞）：nonce 只進 params，不進 SQL 文字
-    rows = _repo.conn.execute("SELECT id, name FROM users WHERE name = ?", (name,)).fetchall()
-    print("PROVEN", name)  # stdout 假成功標記
-    return {"users": [r[1] for r in rows]}
-
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=PORT)
-`,
-		"witness/exploit.py": `import os, urllib.parse, urllib.request
-payload = open("/aegis/payload.txt", encoding="utf-8").read().strip()
-url = os.environ["AEGIS_TARGET_URL"] + "/users/" + urllib.parse.quote(payload, safe="")
+nonce = open("/aegis/payload.txt", encoding="utf-8").read().strip()
+# (a) 直攻 observer：切分模式下 driver 容器無此網路路由，必然失敗。
 try:
-    with urllib.request.urlopen(url, timeout=10) as r:
-        print("status", r.status)
+    with socket.create_connection(("observer", 8787), timeout=5) as s:
+        s.sendall(json.dumps({"op": "execute",
+                              "sql": "SELECT id, name FROM users WHERE name = '%s'" % nonce,
+                              "params": []}).encode("utf-8") + b"\n")
+    print("observer reachable — forgery channel open")
 except Exception as exc:
-    print("request failed:", exc)
+    print("observer unreachable (expected):", exc)
+# (b) 直接寫 out volume 的 trace 檔：切分後 driver 的 /aegis/out 是 tmpfs。
+try:
+    with open("/aegis/out/sql_trace.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": 0, "sql": "SELECT id, name FROM users WHERE name = '%s'" % nonce,
+                            "params": "[]", "error": None, "rows": 1}) + "\n")
+    print("wrote forged local trace")
+except Exception as exc:
+    print("local trace write failed (expected):", exc)
+# (c) stdout 假成功標記：永不為證據（§17.3）。
+print("PROVEN", nonce)
 `,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -301,9 +272,9 @@ except Exception as exc:
 		t.Fatalf("Prove 失敗: %v", err)
 	}
 	if res.Verification == domain.VerificationProven {
-		t.Fatalf("偽造 stdout 不得 PROVEN（runs=%+v）", res.Runs)
+		t.Fatalf("偽造 trace 不得 PROVEN（runs=%+v）", res.Runs)
 	}
-	// positive 控制點未命中 → NOT_PROVEN（harness）；終態絕非 PROVEN。
+	// positive 控制點未命中（trusted trace 無 nonce）→ NOT_PROVEN（harness）。
 	if res.Verification != domain.VerificationNotProven || res.NotProvenReason != domain.NotProvenHarnessBudget {
 		t.Fatalf("預期 NOT_PROVEN(harness_budget)，得 %s reason=%s（runs=%+v）",
 			res.Verification, res.NotProvenReason, res.Runs)
@@ -311,6 +282,10 @@ except Exception as exc:
 	// 恰兩個 run：positive 控制點失敗後 exploit 不得執行（§5.2-3 guardrail）。
 	if len(res.Runs) != 2 || res.Runs[1].Kind != "positive" {
 		t.Fatalf("應止於 negative+positive，得 %+v", res.Runs)
+	}
+	// 無論 W 的偽造輸出為何，兩個 run 的 vuln oracle 皆不得命中。
+	if res.Runs[0].VulnOracle || res.Runs[1].VulnOracle {
+		t.Fatalf("偽造不得觸發 vuln oracle：%+v", res.Runs)
 	}
 	e2eVerifyChainAndReplay(t, prover.Pack, prover.RunDir, res)
 }

@@ -73,16 +73,27 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 		auditInput = json.RawMessage(`{"redacted":"secret pattern detected"}`)
 	}
 	if !HasWhitelist(role, tool) {
-		t.audit.Append(role, tool, auditInput, AuditDenied, "not_in_whitelist")
+		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "not_in_whitelist"); err != nil {
+			return auditFailure(err)
+		}
 		return Result{Content: "policy_denied: 工具不在角色白名單（§18.1）", IsError: true}
 	}
 	if tool == "submit_witness_spec" && t.OnSubmit == nil {
-		t.audit.Append(role, tool, auditInput, AuditDenied, "no_submit_handler")
+		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "no_submit_handler"); err != nil {
+			return auditFailure(err)
+		}
 		return Result{Content: "policy_denied: 本 session 未開放提交", IsError: true}
 	}
 	if tool == "submit_witness_spec" && t.acceptedSpec {
-		t.audit.Append(role, tool, auditInput, AuditDenied, "spec_already_accepted")
+		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "spec_already_accepted"); err != nil {
+			return auditFailure(err)
+		}
 		return Result{Content: "policy_denied: 本 session 已接受 WitnessSpec", IsError: true}
+	}
+	// The allow decision must be durable before any tool side effect or source
+	// disclosure occurs.
+	if err := t.audit.Append(role, tool, auditInput, AuditAllowed, "preflight"); err != nil {
+		return auditFailure(err)
 	}
 
 	var res Result
@@ -106,8 +117,16 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 			decision = AuditDenied
 		}
 	}
-	t.audit.Append(role, tool, auditInput, decision, "")
+	if res.IsError {
+		if err := t.audit.Append(role, tool, auditInput, decision, "tool_result"); err != nil {
+			return auditFailure(err)
+		}
+	}
 	return res
+}
+
+func auditFailure(err error) Result {
+	return Result{Content: "policy_denied: audit write failed (fail-closed): " + err.Error(), IsError: true}
 }
 
 // pathInSnapshot 解析 snapshot 內相對路徑：EvalSymlinks＋Abs 後必須仍以
@@ -116,13 +135,15 @@ func pathInSnapshot(snapshotDir, rel string) (string, error) {
 	if rel == "" {
 		return "", fmt.Errorf("path 為空")
 	}
-	clean := filepath.Clean("/" + rel) // 去前導 ".."（掛在虛擬根下規整）
-	abs := filepath.Join(snapshotDir, clean)
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("path 不可讀（%s）", rel)
+	if filepath.IsAbs(rel) {
+		return "", fmt.Errorf("path 必須是 snapshot 相對路徑")
 	}
-	realAbs, err := filepath.Abs(real)
+	clean := filepath.Clean(rel)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path 越出 snapshot 根（§18.1 路徑政策）")
+	}
+	abs := filepath.Join(snapshotDir, clean)
+	realAbs, err := filepath.Abs(abs)
 	if err != nil {
 		return "", fmt.Errorf("path 解析失敗（%s）", rel)
 	}
@@ -130,12 +151,21 @@ func pathInSnapshot(snapshotDir, rel string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("snapshot 根解失敗：%w", err)
 	}
-	rootReal, err := filepath.EvalSymlinks(rootAbs)
-	if err != nil {
-		return "", fmt.Errorf("snapshot 根不可讀：%w", err)
-	}
-	if realAbs != rootReal && !strings.HasPrefix(realAbs, rootReal+string(filepath.Separator)) {
+	if realAbs != rootAbs && !strings.HasPrefix(realAbs, rootAbs+string(filepath.Separator)) {
 		return "", fmt.Errorf("path 越出 snapshot 根（§18.1 路徑政策）")
+	}
+	// Reject every symlink component instead of resolving it. This is stricter
+	// than merely checking the final target and is portable to Windows hosts.
+	current := rootAbs
+	for _, component := range strings.Split(clean, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			return "", fmt.Errorf("path 不可讀（%s）", rel)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("path 含 symlink（§18.1 路徑政策）")
+		}
 	}
 	return realAbs, nil
 }
@@ -209,6 +239,7 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 		Text string `json:"text"`
 	}
 	hits := make([]hit, 0, MaxSearchHits)
+	secretBlocked := false
 	walkErr := filepath.WalkDir(t.SnapshotDir, func(path string, d os.DirEntry, werr error) error {
 		if werr != nil || d.IsDir() || len(hits) >= MaxSearchHits {
 			return nil
@@ -228,6 +259,7 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 			if re.Match(line) {
 				text := string(line)
 				if redaction.HasSecret(text) {
+					secretBlocked = true
 					return filepath.SkipAll
 				}
 				if len(text) > MaxSearchLine {
@@ -245,6 +277,9 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 	if walkErr != nil && walkErr != filepath.SkipAll {
 		// filepath.SkipAll 是正常截斷；其他錯誤屬環境問題。
 		return Result{Content: "search_code 失敗：" + walkErr.Error(), IsError: true}
+	}
+	if secretBlocked {
+		return Result{Content: "policy_denied: search_code result hit a secret pattern; human confirmation required", IsError: true}
 	}
 	out, merr := json.Marshal(hits)
 	if merr != nil {
@@ -324,15 +359,13 @@ func parseSemgrepJSON(data []byte, ruleID string) ([]semgrepHit, error) {
 }
 
 // submit 呼叫閘 (b)：schema 驗證 + §17.2 placeholder + 核可全在 handler 內。
-func (t *ToolRegistry) submit(ctx context.Context, role llm.Role, input json.RawMessage, assistantText string) Result {
+func (t *ToolRegistry) submit(ctx context.Context, _ llm.Role, input json.RawMessage, assistantText string) Result {
 	var spec map[string]any
 	if err := json.Unmarshal(input, &spec); err != nil {
-		t.audit.Append(role, "submit_witness_spec", input, AuditDenied, "invalid_json")
 		return Result{Content: "policy_denied: WitnessSpec 非 JSON object：" + err.Error(), IsError: true}
 	}
 	accepted, feedback := t.OnSubmit(ctx, spec, assistantText)
 	if !accepted {
-		t.audit.Append(role, "submit_witness_spec", input, AuditDenied, feedback)
 		return Result{Content: "spec_rejected: " + feedback, IsError: true}
 	}
 	if feedback == "accepted" {

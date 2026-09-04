@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/aegis-dev/aegis/internal/redaction"
 )
 
 // Finding 是機讀 finding（欄位對應 schemas/finding.schema.json）。
@@ -28,7 +30,7 @@ func WriteFindings(dir string, findings []Finding) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "findings.json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := redaction.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("reporting: write findings.json: %w", err)
 	}
 	return path, nil
@@ -58,10 +60,10 @@ func WriteSARIF(dir string, findings []Finding) (string, error) {
 			map[string]any{
 				"tool": map[string]any{
 					"driver": map[string]any{
-						"name":            "aegis",
-						"informationUri":  "https://aegis.dev",
-						"version":         "0.1.0",
-						"rules":           sarifRules(findings),
+						"name":           "aegis",
+						"informationUri": "https://aegis.dev",
+						"version":        "0.1.0",
+						"rules":          sarifRules(findings),
 					},
 				},
 				"results": sarifResults(findings),
@@ -73,7 +75,7 @@ func WriteSARIF(dir string, findings []Finding) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "findings.sarif")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := redaction.WriteFile(path, data, 0o644); err != nil {
 		return "", fmt.Errorf("reporting: write sarif: %w", err)
 	}
 	return path, nil
@@ -101,7 +103,7 @@ func sarifRules(findings []Finding) []any {
 		}
 		seen[id] = true
 		rules = append(rules, map[string]any{
-			"id": id,
+			"id":               id,
 			"shortDescription": map[string]any{"text": "Aegis sink: " + id},
 		})
 	}
@@ -169,10 +171,16 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 	}
 
 	b.WriteString("\n---\n\n## 電子產物\n\n")
-	b.WriteString("- `findings.json`（機讀全量）\n- `findings.sarif`（IDE/CI 整合）\n- `guardrails/`（絆線）\n- `evidence/`（可複查 bundle）\n")
+	b.WriteString("- `findings.json`（機讀全量）\n- `findings.sarif`（IDE/CI 整合）\n")
+	if st, err := os.Stat(filepath.Join(dir, "guardrails")); err == nil && st.IsDir() {
+		b.WriteString("- `guardrails/`（已驗證絆線）\n")
+	}
+	if st, err := os.Stat(filepath.Join(dir, "evidence")); err == nil && st.IsDir() {
+		b.WriteString("- `evidence/`（可複查 bundle）\n")
+	}
 
 	path := filepath.Join(dir, "report.md")
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if err := redaction.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		return "", fmt.Errorf("reporting: write report.md: %w", err)
 	}
 	return path, nil
@@ -195,6 +203,9 @@ func writeFinding(b *strings.Builder, f Finding) {
 	sink := asMap(f["sink"])
 	fmt.Fprintf(b, "### %s — %s（%s / %s）\n\n",
 		str(f["id"]), str(sink["symbol"]), str(f["reachability"]), str(f["verification"]))
+	if str(f["verification"]) == "PROVEN" && str(f["evidence_id"]) != "" {
+		b.WriteString("重現／重驗：`aegis replay --run-dir <run-dir>`\n\n")
+	}
 
 	// D2/D3 即使 PROVEN 也必須寫「合成見證下已證明」（§14-1）
 	reach := str(f["reachability"])

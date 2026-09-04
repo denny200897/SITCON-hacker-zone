@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,9 @@ func TestCpTarStdinCancelHonored(t *testing.T) {
 // TestCpTarStdinHappyPath：取消路徑之外，正常注入仍應成功（fake docker 消費 stdin
 // 後 exit 0）；無 deadline 時 cpTarStdin 自套逾時（§17.1 host 端強制）。
 func TestCpTarStdinHappyPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake executable")
+	}
 	r := fakeDockerBin(t, "cat >/dev/null\n")
 	if err := r.cpTarStdin(context.Background(), "cid", "/stage", []byte("tar-bytes")); err != nil {
 		t.Fatalf("cpTarStdin 正常路徑失敗：%v", err)

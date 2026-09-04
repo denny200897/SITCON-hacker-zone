@@ -27,9 +27,11 @@ import (
 	"github.com/aegis-dev/aegis/internal/orchestrator/budget"
 	"github.com/aegis-dev/aegis/internal/orchestrator/snapshot"
 	"github.com/aegis-dev/aegis/internal/packs"
+	"github.com/aegis-dev/aegis/internal/redaction"
 	"github.com/aegis-dev/aegis/internal/reporting"
 	"github.com/aegis-dev/aegis/internal/sandbox"
 	"github.com/aegis-dev/aegis/internal/schemav"
+	"github.com/aegis-dev/aegis/internal/settings"
 	"github.com/aegis-dev/aegis/internal/triage"
 )
 
@@ -42,8 +44,9 @@ func main() {
 }
 
 func newRoot() *cobra.Command {
-	root := &cobra.Command{Use: "aegis", Short: "Aegis 程式碼資安審查 Agent Harness", SilenceUsage: true}
-	root.AddCommand(newConsole(), newStage("scan", "掃描目標 repo（Stage 0–2）"), newStage("prove", "對 finding 執行證明"), newStage("report", "產生審查報告"))
+	root := &cobra.Command{Use: "aegis", Short: "Aegis 程式碼資安審查 Agent Harness", SilenceUsage: true,
+		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return runConsole(cmd.Context()) }}
+	root.AddCommand(newConsole(), newStage("scan", "掃描目標 repo（Stage 0–2）"), newStage("prove", "對 finding 執行證明"), newStage("report", "產生審查報告"), newStage("replay", "離線重驗 evidence bundle"))
 	return root
 }
 
@@ -51,20 +54,63 @@ func newConsole() *cobra.Command {
 	return &cobra.Command{
 		Use: "console", Short: "進入互動模式",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			user, err := credentials.DefaultFilePath()
-			if err != nil {
-				return err
-			}
-			settingsPath := filepath.Join(filepath.Dir(user), "settings.toml")
-			return console.Run(console.Deps{
-				In: os.Stdin, Out: os.Stdout,
-				UserConfigPath: settingsPath, CredentialsPath: user,
-				Keyring:    credentials.NewOSKeyring(),
-				ReadSecret: readSecret,
-				Doctor:     func(ctx context.Context) []doctor.Check { return doctor.Run(ctx, doctor.Options{}) },
-			})
+			return runConsole(cmd.Context())
 		},
 	}
+}
+
+func runConsole(ctx context.Context) error {
+	credentialPath, err := credentials.DefaultFilePath()
+	if err != nil {
+		return err
+	}
+	settingsPath := filepath.Join(filepath.Dir(credentialPath), "settings.toml")
+	return console.Run(console.Deps{
+		In: os.Stdin, Out: os.Stdout, UserConfigPath: settingsPath, CredentialsPath: credentialPath,
+		Keyring: credentials.NewOSKeyring(), ReadSecret: readSecret,
+		Doctor: func(checkCtx context.Context) []doctor.Check {
+			options, optionErr := defaultDoctorOptions(".", "packs/python-web", settingsPath, credentialPath)
+			if optionErr != nil {
+				return []doctor.Check{{Name: "configuration", OK: false, Detail: optionErr.Error()}}
+			}
+			return doctor.Run(checkCtx, options)
+		},
+	})
+}
+
+func defaultDoctorOptions(repoRoot, packDir, userSettings, credentialPath string) (doctor.Options, error) {
+	user, err := settings.Load(userSettings)
+	if err != nil {
+		return doctor.Options{}, err
+	}
+	repo, err := settings.Load(filepath.Join(repoRoot, "aegis.toml"))
+	if err != nil {
+		return doctor.Options{}, err
+	}
+	providers := map[string]settings.Provider{}
+	for name, provider := range user.Providers {
+		providers[name] = provider
+	}
+	for name, provider := range repo.Providers {
+		providers[name] = provider
+	}
+	absPack, err := filepath.Abs(packDir)
+	if err != nil {
+		return doctor.Options{}, err
+	}
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		return doctor.Options{}, err
+	}
+	manager := &credentials.Manager{Keyring: credentials.NewOSKeyring(), File: &credentials.FileStore{Path: credentialPath}}
+	return doctor.Options{PackDirs: []string{absPack}, CachePath: filepath.Join(cacheRoot, "aegis", "images.json"), Providers: providers,
+		ResolveKey: func(name string) (string, string, error) {
+			provider, ok := providers[name]
+			if !ok {
+				return "", "", fmt.Errorf("unknown provider %q", name)
+			}
+			return manager.Resolve(name, credentials.ProviderType(provider.Type))
+		}}, nil
 }
 
 func readSecret(prompt string) ([]byte, error) {
@@ -99,11 +145,13 @@ func newStage(name, short string) *cobra.Command {
 			if targetSubdir != "" {
 				root = filepath.Join(root, targetSubdir)
 			}
-			inv, err := inventory.Build(root)
+			// Snapshot is the first repository read. All later scan stages consume
+			// the immutable copy so provenance cannot drift under worktree edits.
+			snap, err := snapshot.Create(root, filepath.Join(root, ".aegis", "cache"), inventory.DefaultExcludes)
 			if err != nil {
 				return stageError(name, err)
 			}
-			snap, err := snapshot.Create(root, filepath.Join(root, ".aegis", "cache"), inventory.DefaultExcludes)
+			inv, err := inventory.Build(snap.Dir)
 			if err != nil {
 				return stageError(name, err)
 			}
@@ -133,28 +181,31 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
-			if err := os.WriteFile(filepath.Join(runDir, "inventory.json"), append(data, '\n'), 0o644); err != nil {
+			if err := redaction.WriteFile(filepath.Join(runDir, "inventory.json"), append(data, '\n'), 0o644); err != nil {
 				return stageError(name, err)
 			}
 			if _, err := j.Append("stage_completed", "", map[string]any{"stage": "inventory", "artifact": "inventory.json"}); err != nil {
 				return stageError(name, err)
 			}
-			var cs []candidates.Candidate
+			var detectorResults [][]candidates.Candidate
 			if len(pack.Manifest.Detectors) > 0 {
-				det := pack.Manifest.Detectors[0]
 				if _, err := exec.LookPath("semgrep"); err != nil {
 					return stageError(name, fmt.Errorf("找不到 semgrep：%w", err))
 				}
-				cs, err = candidates.Run(cmd.Context(), root, filepath.Join(packDir, det.Path), det.ID, "semgrep")
-				if err != nil {
-					return stageError(name, err)
+				for _, det := range pack.Manifest.Detectors {
+					group, runErr := candidates.Run(cmd.Context(), snap.Dir, filepath.Join(packDir, det.Path), det.ID, "semgrep")
+					if runErr != nil {
+						return stageError(name, runErr)
+					}
+					detectorResults = append(detectorResults, group)
 				}
 			}
+			cs := candidates.Merge(detectorResults...)
 			cb, err := json.MarshalIndent(cs, "", "  ")
 			if err != nil {
 				return stageError(name, err)
 			}
-			if err := os.WriteFile(filepath.Join(runDir, "candidates.json"), append(cb, '\n'), 0o644); err != nil {
+			if err := redaction.WriteFile(filepath.Join(runDir, "candidates.json"), append(cb, '\n'), 0o644); err != nil {
 				return stageError(name, err)
 			}
 			for _, c := range cs {
@@ -172,14 +223,26 @@ func newStage(name, short string) *cobra.Command {
 				if err != nil {
 					return stageError(name, err)
 				}
-				t := triage.Evaluate(c, inv)
+				t := triage.EvaluateAt(c, inv, snap.Dir)
 				triages = append(triages, t)
-				f := reporting.Finding{"id": fid, "sink": map[string]any{"file": c.Sink.File, "line": c.Sink.Line, "symbol": c.Sink.Symbol, "type": c.Sink.Type}, "sources": []any{map[string]any{"origin": "semgrep", "rule": c.Sources[0].Rule}}, "reachability": t.Reachability, "verification": "NOT_RUN", "disposition": "OPEN", "snapshot_id": snap.ID, "severity": "high", "confidence": 0.5, "rationale": t.Rationale}
+				sources := make([]any, 0, len(c.Sources))
+				for _, source := range c.Sources {
+					sources = append(sources, map[string]any{"origin": source.Origin, "rule": source.Rule})
+				}
+				impact, ok := pack.Impact(c.Sink.Type)
+				if !ok {
+					impact = "medium"
+				}
+				f := reporting.Finding{"id": fid, "sink": map[string]any{"file": c.Sink.File, "line": c.Sink.Line, "symbol": c.Sink.Symbol, "type": c.Sink.Type}, "sources": sources, "reachability": t.Reachability, "verification": "NOT_RUN", "disposition": "OPEN", "snapshot_id": snap.ID, "severity": triage.Severity(impact, t.Reachability), "confidence": triage.Confidence("NOT_RUN", t.Mode, 0, 0), "rationale": t.Rationale}
 				if t.Mode != "" {
 					f["mode"] = t.Mode
 				}
 				if len(t.MissingLinks) > 0 {
-					f["missing_links"] = []string{"entrypoint: inventory 未找到同檔案入口"}
+					links := make([]string, 0, len(t.MissingLinks))
+					for _, link := range t.MissingLinks {
+						links = append(links, link["link"]+": "+link["evidence"])
+					}
+					f["missing_links"] = links
 				}
 				findings = append(findings, f)
 				if _, err := j.Append("candidate_created", fid, map[string]any{"candidate": c}); err != nil {
@@ -196,7 +259,7 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
-			if err := os.WriteFile(filepath.Join(runDir, "triage.json"), append(tb, '\n'), 0o644); err != nil {
+			if err := redaction.WriteFile(filepath.Join(runDir, "triage.json"), append(tb, '\n'), 0o644); err != nil {
 				return stageError(name, err)
 			}
 			for _, t := range triages {
@@ -216,7 +279,7 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
-			if err := os.WriteFile(filepath.Join(runDir, "findings.json"), append(fb, '\n'), 0o644); err != nil {
+			if err := redaction.WriteFile(filepath.Join(runDir, "findings.json"), append(fb, '\n'), 0o644); err != nil {
 				return stageError(name, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "scan 完成：%d 個檔案、%d 個入口、%d 個 candidate\n產物：%s\n", len(inv.Files), len(inv.Entrypoints), len(cs), runDir)
@@ -283,9 +346,26 @@ func newStage(name, short string) *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "report 完成：%s\n", path)
 			return nil
 		}
+		if name == "replay" {
+			if runDir == "" {
+				runDir = latestRunDir(target)
+			}
+			if runDir == "" {
+				return stageError(name, errors.New("找不到 run 目錄"))
+			}
+			pack, err := packs.Load(packDir, false)
+			if err != nil {
+				return stageError(name, err)
+			}
+			if err := orchestrator.ReplayBundle(pack, runDir); err != nil {
+				return stageError(name, err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "replay 驗證通過：%s\n", runDir)
+			return nil
+		}
 		if name == "prove" {
-			if len(args) > 1 {
-				return stageError(name, errors.New("最多指定一個 finding ID"))
+			if len(args) != 1 {
+				return stageError(name, errors.New("必須指定 scan 產生的一個 finding ID"))
 			}
 			if specPath == "" {
 				return stageError(name, errors.New("缺少 --spec WitnessSpec JSON"))
@@ -302,21 +382,55 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
-			snap, err := snapshot.Create(target, filepath.Join(target, ".aegis", "cache"), inventory.DefaultExcludes)
+			if runDir == "" {
+				runDir = latestRunDir(target)
+			}
+			if runDir == "" {
+				return stageError(name, errors.New("找不到 scan run；prove 不會自行建立或替換 snapshot"))
+			}
+			findingsData, err := os.ReadFile(filepath.Join(runDir, "findings.json"))
 			if err != nil {
 				return stageError(name, err)
 			}
-			if runDir == "" {
-				runDir = filepath.Join(target, "out", "run-"+time.Now().UTC().Format("20060102-150405"))
-			}
-			if err := os.MkdirAll(runDir, 0o755); err != nil {
+			var findings []reporting.Finding
+			if err := json.Unmarshal(findingsData, &findings); err != nil {
 				return stageError(name, err)
+			}
+			findingID := args[0]
+			var finding reporting.Finding
+			for _, candidate := range findings {
+				if candidate["id"] == findingID {
+					finding = candidate
+					break
+				}
+			}
+			if finding == nil {
+				return stageError(name, fmt.Errorf("finding %s 不存在於此 run", findingID))
+			}
+			snapshotID, _ := finding["snapshot_id"].(string)
+			reachability, _ := finding["reachability"].(string)
+			snapshotDir := filepath.Join(target, ".aegis", "cache", "snapshots", snapshotID)
+			if stat, err := os.Stat(snapshotDir); err != nil || !stat.IsDir() {
+				return stageError(name, fmt.Errorf("scan snapshot %s 不存在；拒絕改用 live worktree", snapshotID))
 			}
 			j, err := journal.Open(filepath.Join(runDir, "journal.sqlite"))
 			if err != nil {
 				return stageError(name, err)
 			}
 			defer j.Close()
+			repoTreeHash := ""
+			events, err := j.Events()
+			if err != nil {
+				return stageError(name, err)
+			}
+			for _, event := range events {
+				if event.Type == "snapshot_created" && event.Payload["snapshot_id"] == snapshotID {
+					repoTreeHash, _ = event.Payload["tree_hash"].(string)
+				}
+			}
+			if repoTreeHash == "" {
+				return stageError(name, errors.New("journal 缺少 snapshot tree hash"))
+			}
 			store, err := evidence.NewStore(runDir)
 			if err != nil {
 				return stageError(name, err)
@@ -325,14 +439,23 @@ func newStage(name, short string) *cobra.Command {
 			if !ok {
 				return stageError(name, errors.New("pack 缺 helper/alpine digest"))
 			}
-			findingID := "F-0001"
-			if len(args) == 1 {
-				findingID = args[0]
-			}
 			p := &orchestrator.Prover{Runner: &sandbox.Runner{HelperImage: helper}, Journal: j, Store: store, Pack: pack, PackDir: packDir,
-				SnapshotID: snap.ID, SnapshotDir: snap.Dir, RunDir: runDir, RepoTreeHash: snap.TreeHash, Budget: budget.Default()}
-			res, err := p.Prove(cmd.Context(), orchestrator.ProveInput{FindingID: findingID, Reachability: "D2", Spec: spec})
+				SnapshotID: snapshotID, SnapshotDir: snapshotDir, RunDir: runDir, RepoTreeHash: repoTreeHash, Budget: budget.Default()}
+			res, err := p.Prove(cmd.Context(), orchestrator.ProveInput{FindingID: findingID, Reachability: reachability, Spec: spec})
 			if err != nil {
+				return stageError(name, err)
+			}
+			finding["verification"] = string(res.Verification)
+			if len(res.Runs) > 0 && res.Runs[len(res.Runs)-1].EvidenceID != "" {
+				finding["evidence_id"] = res.Runs[len(res.Runs)-1].EvidenceID
+			}
+			mode, _ := finding["mode"].(string)
+			assumptions := 0
+			if values, ok := finding["assumptions"].([]any); ok {
+				assumptions = len(values)
+			}
+			finding["confidence"] = triage.Confidence(string(res.Verification), mode, assumptions, 1)
+			if _, err := reporting.WriteFindings(runDir, findings); err != nil {
 				return stageError(name, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "prove 完成：%s\n產物：%s\n", res.Verification, runDir)

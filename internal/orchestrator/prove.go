@@ -293,6 +293,15 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 			files[rel] = []byte(s)
 		}
 	}
+	// 容器 T 專屬注入檔（ADR 0005）：policy 編譯的 target/binding.json（純資料，
+	// 非模型執行碼）。兩容器掛同一份 per-run volume（ro），各取所需。
+	targetFiles, terr := TargetFiles(rr)
+	if terr != nil {
+		return "", "", 0, terr
+	}
+	for k, v := range targetFiles {
+		files[k] = v
+	}
 	var payload []byte
 	if pl, ok := rr["payload"].(string); ok {
 		payload = []byte(pl)
@@ -306,9 +315,10 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		return "", "", 0, err
 	}
 	if spec.ObserverImage != "" {
-		// The observer owns the per-run internal network and must be alive before
-		// the witness is created/started; otherwise service startup can race a
-		// missing observer DNS endpoint and produce no trusted trace.
+		// The observer owns the per-run internal networks (observer + driver,
+		// ADR 0005) and must be alive before both containers are created/started;
+		// otherwise service startup can race a missing DNS endpoint and produce
+		// no trusted trace.
 		if err := p.Runner.StartObserver(ctx, runID, spec.ObserverImage, seccomp); err != nil {
 			return "", "", 0, err
 		}
@@ -326,6 +336,28 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if err != nil {
 		return "", "", 0, err
 	}
+	// 雙容器切分（ADR 0005）：DockerArgs 組出的是容器 T（trusted side）。先把 T
+	// 接上 driver network（alias target）、detached 啟動，再以 DockerDriverArgs
+	// 建容器 W 並 attached 跑——W 的 exit 維持 §17.1 的 run 結果契約。
+	targetCid := ""
+	if spec.Driver != nil {
+		if err := p.Runner.ConnectTargetNetwork(ctx, runID, cid); err != nil {
+			return "", "", 0, err
+		}
+		if err := p.Runner.StartDetached(ctx, cid); err != nil {
+			return "", "", 0, err
+		}
+		dargs, err := sandbox.DockerDriverArgs(spec)
+		if err != nil {
+			return "", "", 0, err
+		}
+		driverCid, err := p.Runner.Create(dargs)
+		if err != nil {
+			return "", "", 0, err
+		}
+		targetCid = cid
+		cid = driverCid
+	}
 
 	timeout, err := reqInt(rr, "timeout_sec")
 	if err != nil {
@@ -335,7 +367,28 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	// P2-2）；timeout 逾時語意不變（§17.1 host 端強制）。
 	exit, err = p.Runner.Start(ctx, cid, timeout)
 	if err != nil {
-		return "", "", 0, err
+		return "", "", exit, err
+	}
+	stdout, stderr, err := p.Runner.Logs(ctx, cid)
+	if err != nil {
+		return "", "", exit, err
+	}
+	if redaction.HasSecret(string(stdout)) || redaction.HasSecret(string(stderr)) {
+		return "", "", exit, fmt.Errorf("orchestrator: secret pattern in container output (persistence denied)")
+	}
+	// 容器 T 的輸出為資訊性（T 是 trusted side；oracle 判定不讀容器輸出）。
+	// 於 reclaim 刪除 T 前收取；命中金鑰樣式即不落檔（不中斷 run）。
+	tLogs := [][]byte{nil, nil}
+	if targetCid != "" {
+		tOut, tStderr, lerr := p.Runner.Logs(ctx, targetCid)
+		if lerr == nil {
+			if !redaction.HasSecret(string(tOut)) {
+				tLogs[0] = tOut
+			}
+			if !redaction.HasSecret(string(tStderr)) {
+				tLogs[1] = tStderr
+			}
+		}
 	}
 
 	// 收回產物（§17.6）：artifacts 到 evidence/runs/<runID>/。
@@ -344,8 +397,23 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		return "", "", exit, err
 	}
 	// Reclaim 套與 run 容器同一份 seccomp／hardening（§17.6-2、§23-8；P2-2）。
-	if rerr := p.Runner.ReclaimWithObserver(ctx, cid, runID, artDir, seccomp, spec.ObserverImage != ""); rerr != nil {
+	// 切分模式下同時 diff／刪除容器 T（fs_diff_target.txt 為資訊性）。
+	if rerr := p.Runner.ReclaimPair(ctx, cid, targetCid, runID, artDir, seccomp, spec.ObserverImage != ""); rerr != nil {
 		return "", "", exit, fmt.Errorf("orchestrator: reclaim %s: %w", runID, rerr)
+	}
+	if err := os.WriteFile(filepath.Join(artDir, "stdout.log"), stdout, 0o600); err != nil {
+		return "", "", exit, fmt.Errorf("orchestrator: persist stdout: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(artDir, "stderr.log"), stderr, 0o600); err != nil {
+		return "", "", exit, fmt.Errorf("orchestrator: persist stderr: %w", err)
+	}
+	for i, name := range []string{"target_stdout.log", "target_stderr.log"} {
+		if tLogs[i] == nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(artDir, name), tLogs[i], 0o600); err != nil {
+			return "", "", exit, fmt.Errorf("orchestrator: persist %s: %w", name, err)
+		}
 	}
 
 	// evidence：run_result 落 EV（含 nonce 供離線 replay）。
@@ -359,17 +427,24 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	}
 	artifacts := []string{}
 	artifactHashes := map[string]any{}
-	if ents, rerr := os.ReadDir(artDir); rerr == nil {
-		for _, ent := range ents {
-			if ent.IsDir() {
-				continue
-			}
-			artifacts = append(artifacts, ent.Name())
-			if b, herr := os.ReadFile(filepath.Join(artDir, ent.Name())); herr == nil {
-				h := sha256.Sum256(b)
-				artifactHashes[ent.Name()] = "sha256:" + hex.EncodeToString(h[:])
-			}
+	ents, rerr := os.ReadDir(artDir)
+	if rerr != nil {
+		return "", "", exit, fmt.Errorf("orchestrator: read artifacts: %w", rerr)
+	}
+	for _, ent := range ents {
+		if ent.IsDir() {
+			continue
 		}
+		artifacts = append(artifacts, ent.Name())
+		b, herr := os.ReadFile(filepath.Join(artDir, ent.Name()))
+		if herr != nil {
+			return "", "", exit, fmt.Errorf("orchestrator: read artifact %s: %w", ent.Name(), herr)
+		}
+		if redaction.HasSecret(string(b)) {
+			return "", "", exit, fmt.Errorf("orchestrator: secret pattern in artifact %s (persistence denied)", ent.Name())
+		}
+		h := sha256.Sum256(b)
+		artifactHashes[ent.Name()] = "sha256:" + hex.EncodeToString(h[:])
 	}
 	// stdout/stderr are intentionally informational only. The checker reads
 	// observer artifacts; neither stream can establish a positive result.
@@ -378,6 +453,10 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if vulnErr != nil || touchErr != nil {
 		return "", "", exit, fmt.Errorf("orchestrator: checker: vuln=%v touch=%v", vulnErr, touchErr)
 	}
+	fsDiff, err := parseFSDiff(artDir)
+	if err != nil {
+		return "", "", exit, err
+	}
 	doc := map[string]any{
 		"id": evID, "kind": kind, "finding_id": findingID, "run_id": runID,
 		"snapshot_id": p.SnapshotID, "repo_tree_hash": p.repoTreeHash(),
@@ -385,9 +464,9 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		"pack":           map[string]any{"id": p.Pack.Manifest.PackID, "version": p.Pack.Manifest.Version, "abi": int64(p.Pack.Manifest.SchemaVersion)},
 		"runner_version": p.runnerVersion(), "prompt_version": p.promptVersion(), "schemas_version": domain.SchemasVersion,
 		"run_request_hash": requestHash,
-		"run_result": map[string]any{"run_id": runID, "exit": int64(exit), "stdout": "", "stderr": "", "artifacts": artifacts, "artifact_hashes": artifactHashes,
-			"fs_diff": map[string]any{"added": []any{}, "modified": []any{}}},
-		"oracle": map[string]any{"oracle_id": strField(rr, "oracle_id"), "nonce": nonce, "nonce_observed": true, "result": vulnResult,
+		"run_result": map[string]any{"run_id": runID, "exit": int64(exit), "stdout": string(stdout), "stderr": string(stderr), "stdout_sha256": digestBytes(stdout), "stderr_sha256": digestBytes(stderr), "stdout_truncated": false, "stderr_truncated": false, "artifacts": artifacts, "artifact_hashes": artifactHashes,
+			"fs_diff": fsDiff},
+		"oracle": map[string]any{"oracle_id": strField(rr, "oracle_id"), "nonce": nonce, "nonce_observed": vulnResult || touchResult, "result": vulnResult,
 			"touch": map[string]any{"oracle_id": touchOracleID(p.Pack, strField(rr, "oracle_id")), "result": touchResult}},
 		"created_by": "orchestrator", "verified_by": "checker",
 	}
@@ -460,6 +539,32 @@ func (p *Prover) promptVersion() string {
 func digestText(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return "sha256:" + hex.EncodeToString(h[:])
+}
+
+func digestBytes(data []byte) string {
+	h := sha256.Sum256(data)
+	return "sha256:" + hex.EncodeToString(h[:])
+}
+
+func parseFSDiff(artDir string) (map[string]any, error) {
+	added, modified := []any{}, []any{}
+	data, err := os.ReadFile(filepath.Join(artDir, "fs_diff.txt"))
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: read fs diff: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) != 2 {
+			continue
+		}
+		switch fields[0] {
+		case "A":
+			added = append(added, fields[1])
+		case "C":
+			modified = append(modified, fields[1])
+		}
+	}
+	return map[string]any{"added": added, "modified": modified}, nil
 }
 
 // checkOracle 以 pack 的 vuln／touch rule 判定收回的 artifacts。

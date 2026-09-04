@@ -216,6 +216,32 @@ func (r *Runner) Start(ctx context.Context, cid string, timeoutSec int) (exit in
 	return 0, nil
 }
 
+// StartDetached 以 docker start -d 啟動容器（ADR 0005：容器 T 為常駐 trusted
+// side，由 orchestrator 於 reclaim 時終止；不占用 attached stdout）。回傳值只表示
+// 啟動是否成功，容器 exit code 不經本函式（T 的生命週期不構成 run 結果）。
+func (r *Runner) StartDetached(ctx context.Context, cid string) error {
+	if cid == "" {
+		return fmt.Errorf("sandbox: StartDetached 的 cid 為空")
+	}
+	if _, stderr, err := r.runCtx(ctx, 60*time.Second, "start", "-d", cid); err != nil {
+		return wrapErr("start -d", stderr, err)
+	}
+	return nil
+}
+
+// Logs returns the complete stdout and stderr streams while the stopped
+// container still exists. Callers persist and hash both streams as evidence.
+func (r *Runner) Logs(ctx context.Context, cid string) ([]byte, []byte, error) {
+	if cid == "" {
+		return nil, nil, fmt.Errorf("sandbox: Logs cid is empty")
+	}
+	stdout, stderr, err := r.runCtx(ctx, 30*time.Second, "logs", cid)
+	if err != nil {
+		return nil, nil, wrapErr("logs", stderr, err)
+	}
+	return stdout, stderr, nil
+}
+
 // ---- fs-diff（§17.6-1） ----
 
 // Diff 解析 docker diff 輸出：C=modified、A=added；D=deleted 不回傳（原始輸出由
@@ -312,6 +338,15 @@ func (r *Runner) Reclaim(ctx context.Context, cid, runID, destDir, seccomp strin
 
 // ReclaimWithObserver also shuts down and removes the trusted observer sidecar.
 func (r *Runner) ReclaimWithObserver(ctx context.Context, cid, runID, destDir, seccomp string, observer bool) error {
+	return r.ReclaimPair(ctx, cid, "", runID, destDir, seccomp, observer)
+}
+
+// ReclaimPair is ReclaimWithObserver extended for the ADR 0005 split: in
+// addition to the primary container (W; its diff is the evidence fs_diff), a
+// second detached container (T, trusted side) is diffed into
+// fs_diff_target.txt (informational), force-removed, and both teardown paths
+// (volumes, networks, observer sidecar) run as before. targetCid 为空 = 單容器。
+func (r *Runner) ReclaimPair(ctx context.Context, cid, targetCid, runID, destDir, seccomp string, observer bool) error {
 	if cid == "" {
 		return fmt.Errorf("sandbox: Reclaim 的 cid 為空")
 	}
@@ -329,12 +364,21 @@ func (r *Runner) ReclaimWithObserver(ctx context.Context, cid, runID, destDir, s
 		}
 	}
 
-	// 1. fs-diff 原始輸出落檔（§17.6-1）。
+	// 1. fs-diff 原始輸出落檔（§17.6-1）。主容器（W）→ fs_diff.txt；T →
+	// fs_diff_target.txt（資訊性：T 是 trusted side，diff 不作證據）。
 	raw, stderr, err := r.runCtx(ctx, 30*time.Second, "diff", cid)
 	if err != nil {
 		setErr(wrapErr("diff", stderr, err))
 	} else if wErr := os.WriteFile(filepath.Join(destDir, "fs_diff.txt"), raw, 0o644); wErr != nil {
 		setErr(fmt.Errorf("sandbox: 寫入 fs_diff.txt 失敗：%w", wErr))
+	}
+	if targetCid != "" {
+		tRaw, tStderr, tErr := r.runCtx(ctx, 30*time.Second, "diff", targetCid)
+		if tErr != nil {
+			setErr(wrapErr("diff target", tStderr, tErr))
+		} else if wErr := os.WriteFile(filepath.Join(destDir, "fs_diff_target.txt"), tRaw, 0o644); wErr != nil {
+			setErr(fmt.Errorf("sandbox: 寫入 fs_diff_target.txt 失敗：%w", wErr))
+		}
 	}
 
 	// 2. artifacts 收回 helper（§17.6-2）；HelperImage 必為 digest（pack manifest 記錄）。
@@ -357,6 +401,13 @@ func (r *Runner) ReclaimWithObserver(ctx context.Context, cid, runID, destDir, s
 	// 以 context.Background() 清理：取消路徑下仍須刪容器與 volume（§7.1）。
 	if _, stderr, err := r.runTimeout(30*time.Second, "rm", cid); err != nil {
 		setErr(wrapErr("rm", stderr, err))
+	}
+	if targetCid != "" {
+		// T 是 detached 常駐容器：一律 -f（可能仍在跑）。
+		if _, stderr, err := r.runTimeout(30*time.Second, "rm", "-f", targetCid); err != nil &&
+			!strings.Contains(strings.ToLower(string(stderr)), "no such container") {
+			setErr(wrapErr("rm target", stderr, err))
+		}
 	}
 	if vErr := r.removeVolumeRetry(OutVolumePrefix + runID); vErr != nil {
 		// volume 不存在（run 未產生產物等）已於 removeVolumeRetry 視為已收回。
@@ -411,11 +462,14 @@ func (r *Runner) Reaper(runID string) error {
 			}
 		}
 	}
-	// 刪 ssrf network（§17.5-5）；network 不存在（none profile／已清）不算失敗。
-	_, stderr, err = r.runTimeout(30*time.Second, "network", "rm", SSRFNetPrefix+runID)
-	if err != nil && !strings.Contains(strings.ToLower(string(stderr)), "not found") {
-		if firstErr == nil {
-			firstErr = wrapErr("reaper network rm", stderr, err)
+	// 刪 ssrf network（§17.5-5）與 driver network（ADR 0005）；network 不存在
+	//（none profile／已清）不算失敗。
+	for _, net := range []string{SSRFNetPrefix + runID, DriverNetPrefix + runID} {
+		_, stderr, err = r.runTimeout(30*time.Second, "network", "rm", net)
+		if err != nil && !strings.Contains(strings.ToLower(string(stderr)), "not found") {
+			if firstErr == nil {
+				firstErr = wrapErr("reaper network rm", stderr, err)
+			}
 		}
 	}
 	if vErr := r.removeVolumeRetry(TrustedVolumePrefix + runID); vErr != nil && firstErr == nil {

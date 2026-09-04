@@ -133,8 +133,8 @@ func journalEvents(t *testing.T, j *journal.Journal) []journal.Event {
 // TestAgentProverEnvExhausted：env 用盡 → ENV_ERROR（附嘗試日誌）。
 func TestAgentProverEnvExhausted(t *testing.T) {
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp("ok"),
-		submitResp("s2", "{{NONCE}}'-x", "學到：a\n改：b\n預期：c"), endResp("ok"),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'-x", "學到：a\n改：b\n預期：c"),
 	}}
 	prove := &fakeProve{errs: []error{errors.New("docker unavailable"), errors.New("docker unavailable")}}
 	ap, j := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 3})
@@ -172,10 +172,10 @@ func TestAgentProverHypothesesExhausted(t *testing.T) {
 	// fresh round：新 session 不需 preamble，提交第 4 個假設。
 	pre := "學到：x\n改：y\n預期：z"
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
-		submitResp("s2", "{{NONCE}}'-or-1", pre), endResp(""),
-		submitResp("s3", "{{NONCE}}\"-or-2", pre), endResp(""),
-		submitResp("s4", "{{NONCE}}`-or-3", ""), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'-or-1", pre),
+		submitResp("s3", "{{NONCE}}\"-or-2", pre),
+		submitResp("s4", "{{NONCE}}`-or-3", ""),
 	}}
 	prove := &fakeProve{results: []*ProveResult{missResult(), missResult(), missResult(), missResult()}}
 	ap, j := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 3})
@@ -221,8 +221,8 @@ func TestAgentProverHypothesesExhausted(t *testing.T) {
 func TestAgentProverHarnessBudget(t *testing.T) {
 	pre := "學到：x\n改：y\n預期：z"
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
-		submitResp("s2", "{{NONCE}}'-a", pre), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'-a", pre),
 	}}
 	prove := &fakeProve{results: []*ProveResult{
 		{Verification: domain.VerificationNotProven, NotProvenReason: domain.NotProvenHarnessBudget,
@@ -248,8 +248,8 @@ func TestAgentProverHarnessBudget(t *testing.T) {
 func TestAgentProverOscillation(t *testing.T) {
 	pre := "學到：x\n改：y\n預期：z"
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
-		submitResp("s2", "{{NONCE}}'-a", pre), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'-a", pre),
 	}}
 	// 兩次 harness 失敗、artifacts run.log 內容相同（nonce 不同但會被紅線）→ 同簽名。
 	prove := &fakeProve{results: []*ProveResult{
@@ -285,9 +285,9 @@ func TestAgentProverOscillation(t *testing.T) {
 func TestAgentProverOscillationDifferentSig(t *testing.T) {
 	pre := "學到：x\n改：y\n預期：z"
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
-		submitResp("s2", "{{NONCE}}'-a", pre), endResp(""),
-		submitResp("s3", "{{NONCE}}'-b", pre), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'-a", pre),
+		submitResp("s3", "{{NONCE}}'-b", pre),
 	}}
 	prove := &fakeProve{results: []*ProveResult{
 		{Verification: domain.VerificationNotProven, FailureClass: domain.FailureHarness,
@@ -314,11 +314,11 @@ func TestAgentProverGateRejections(t *testing.T) {
 	pre := "學到：x\n改：y\n預期：z"
 	// round1: 提交（成功）→ miss；round2: 同 hash 重送（拒）→ 改帶 preamble 重送不同 payload → miss；round3: 缺 preamble → 拒 → 正確重送 → miss
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
 		// 同 hash 重送 → duplicate_spec；再正確提交
-		submitResp("s2", "{{NONCE}}'", ""), submitResp("s3", "{{NONCE}}'-a", pre), endResp(""),
+		submitResp("s2", "{{NONCE}}'", ""), submitResp("s3", "{{NONCE}}'-a", pre),
 		// 缺 {{NONCE}} → missing_nonce_placeholder；缺 preamble → missing_preamble；再正確提交
-		submitResp("s4", "no-placeholder", pre), submitResp("s5", "{{NONCE}}'-b", ""), submitResp("s6", "{{NONCE}}'-c", pre), endResp(""),
+		submitResp("s4", "no-placeholder", pre), submitResp("s5", "{{NONCE}}'-b", ""), submitResp("s6", "{{NONCE}}'-c", pre),
 		endResp("無後續假設"), // 之後明示無後續假設收斂
 	}}
 	prove := &fakeProve{results: []*ProveResult{missResult(), missResult(), missResult()}}
@@ -363,7 +363,7 @@ func classifyRejection(fb string) string {
 // TestAgentProverProven：第一輪 PROVEN → 終態。
 func TestAgentProverProven(t *testing.T) {
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
 	}}
 	prove := &fakeProve{results: []*ProveResult{{Verification: domain.VerificationProven, OracleID: "sqli.error/v1"}}}
 	ap, _ := newAgentProver(t, ad, prove.Prove, budget.Default())
@@ -405,7 +405,7 @@ func TestAgentProverNoSpecAndMarker(t *testing.T) {
 // TestAgentProverFreshEyesNoSpec：fresh-eyes 輪未提交 → 仍進 HYPOTHESIS_REJECTED。
 func TestAgentProverFreshEyesNoSpec(t *testing.T) {
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
 		endResp("我放棄了"), // fresh 輪未提交
 	}}
 	prove := &fakeProve{results: []*ProveResult{missResult()}}
@@ -427,8 +427,8 @@ func TestAgentProverFreshEyesNoSpec(t *testing.T) {
 // TestAgentProverFreshEyesProven：fresh-eyes 輪 PROVEN → 終態 PROVEN（§9.3）。
 func TestAgentProverFreshEyesProven(t *testing.T) {
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
-		submitResp("s2", "{{NONCE}}'-new", ""), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'-new", ""),
 	}}
 	prove := &fakeProve{results: []*ProveResult{
 		missResult(),
@@ -451,9 +451,9 @@ func TestAgentProverDuplicateNotCounted(t *testing.T) {
 	// round1 提交 A → miss；round2：重送 A（拒）→ 提交 B → miss；round3 重送 B（拒）→ 提交 C → miss
 	pre := "學到：x\n改：y\n預期：z"
 	ad := &scriptAdapter{script: []llm.Response{
-		submitResp("s1", "{{NONCE}}'", ""), endResp(""),
-		submitResp("s2", "{{NONCE}}'", ""), submitResp("s3", "{{NONCE}}'-b", pre), endResp(""),
-		submitResp("s3b", "{{NONCE}}'-b", pre), submitResp("s4", "{{NONCE}}'-c", pre), endResp(""),
+		submitResp("s1", "{{NONCE}}'", ""),
+		submitResp("s2", "{{NONCE}}'", ""), submitResp("s3", "{{NONCE}}'-b", pre),
+		submitResp("s3b", "{{NONCE}}'-b", pre), submitResp("s4", "{{NONCE}}'-c", pre),
 	}}
 	prove := &fakeProve{results: []*ProveResult{missResult(), missResult(), missResult()}}
 	ap, _ := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 3})

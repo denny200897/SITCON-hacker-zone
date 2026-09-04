@@ -21,6 +21,9 @@ import (
 // bundle 必須包含 evidence/EV-*.json 與 evidence/runs/<run_id>/；不需要原始
 // ProveResult，因此可在另一個程序或另一台機器上做自包含 replay。
 func ReplayBundle(pack *packs.Pack, runDir string) error {
+	if err := evidence.VerifyBundle(filepath.Join(runDir, "evidence")); err != nil {
+		return fmt.Errorf("orchestrator: replay: evidence bundle invalid: %w", err)
+	}
 	runsOnDisk, err := loadRunResults(filepath.Join(runDir, "evidence"))
 	if err != nil {
 		return err

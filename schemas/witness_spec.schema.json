@@ -22,6 +22,37 @@
       "propertyNames": {"type": "string", "pattern": "^witness/[A-Za-z0-9._/-]+$"},
       "additionalProperties": {"type": "string"}
     },
+    "wiring": {
+      "type": "object",
+      "description": "宣告式 target 接線（ADR 0005）：policy 驗證後編成 target/binding.json；僅資料、不含可執行內容；args 允許 {{NONCE}} placeholder（§17.2）",
+      "additionalProperties": false,
+      "properties": {
+        "setup": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "required": ["method", "args"],
+            "additionalProperties": false,
+            "properties": {
+              "method": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+              "args": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "null"},
+                    {"type": "array"}
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "assumptions": {
       "type": "array",
       "items": {"type": "string"},

@@ -38,9 +38,7 @@ func TestPathInSnapshot(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("secret\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(root, "leak.py")); err != nil {
-		t.Fatal(err)
-	}
+	symlinkAvailable := os.Symlink(outside, filepath.Join(root, "leak.py")) == nil
 
 	if _, err := pathInSnapshot(root, "a.py"); err != nil {
 		t.Errorf("snapshot 內合法路徑被拒：%v", err)
@@ -48,7 +46,11 @@ func TestPathInSnapshot(t *testing.T) {
 	if _, err := pathInSnapshot(root, "sub/../a.py"); err != nil {
 		t.Errorf("snapshot 內正規化路徑被拒：%v", err)
 	}
-	for _, bad := range []string{"../outside.py", "", "/etc/passwd", "leak.py"} {
+	badPaths := []string{"../outside.py", "", "/etc/passwd"}
+	if symlinkAvailable {
+		badPaths = append(badPaths, "leak.py")
+	}
+	for _, bad := range badPaths {
 		if _, err := pathInSnapshot(root, bad); err == nil {
 			t.Errorf("越界路徑 %q 應被拒", bad)
 		}

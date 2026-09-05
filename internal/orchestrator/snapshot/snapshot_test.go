@@ -180,7 +180,7 @@ func TestCreateExcludePrefixIsSegmentAware(t *testing.T) {
 	}
 }
 
-func TestCreateSymlinkNotFollowed(t *testing.T) {
+func TestCreateRejectsExternalSymlinkAndPreservesInternalSymlink(t *testing.T) {
 	repo := t.TempDir()
 	writeRepo(t, repo)
 	// repo 外的檔案，供 symlink 指向——若實作跟隨 symlink 就會把外部內容複製進快照。
@@ -201,35 +201,29 @@ func TestCreateSymlinkNotFollowed(t *testing.T) {
 	}
 	cache := t.TempDir()
 
+	if _, err := Create(repo, cache, nil); err == nil {
+		t.Fatal("指向 repo 外的 symlink 應 fail closed")
+	}
+	if err := os.Remove(filepath.Join(repo, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
 	s, err := Create(repo, cache, nil)
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatalf("移除外部 symlink 後 Create: %v", err)
 	}
 
-	// symlink 仍是 symlink，target 原樣保留。
-	link := filepath.Join(s.Dir, "link.txt")
+	// repo 內 symlink 仍是 symlink，target 原樣保留。
+	link := filepath.Join(s.Dir, "rel-link.txt")
 	info, err := os.Lstat(link)
-	if err != nil {
-		t.Fatalf("Lstat link.txt: %v", err)
-	}
-	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("link.txt 應為 symlink，實際 mode = %v（被跟隨成實體檔？）", info.Mode())
-	}
-	if got, err := os.Readlink(link); err != nil || got != outside {
-		t.Errorf("link target = %q, err = %v, 期望原樣 %q", got, err, outside)
-	}
-	relLink := filepath.Join(s.Dir, "rel-link.txt")
-	info, err = os.Lstat(relLink)
 	if err != nil {
 		t.Fatalf("Lstat rel-link.txt: %v", err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("rel-link.txt 應為 symlink，實際 mode = %v", info.Mode())
+		t.Fatalf("rel-link.txt 應為 symlink，實際 mode = %v（被跟隨成實體檔？）", info.Mode())
 	}
-	if got, err := os.Readlink(relLink); err != nil || got != "target.txt" {
-		t.Errorf("rel-link target = %q, err = %v, 期望 rel target.txt", got, err)
+	if got, err := os.Readlink(link); err != nil || got != "target.txt" {
+		t.Errorf("link target = %q, err = %v, 期望原樣 target.txt", got, err)
 	}
-
 	// 外部檔案內容絕不可被實體複製進快照。
 	entries := walkSnapshot(t, s.Dir)
 	for p, m := range entries {
@@ -241,8 +235,8 @@ func TestCreateSymlinkNotFollowed(t *testing.T) {
 		t.Error("symlink 被跟隨：外部內容出現在快照中")
 	}
 	// symlink 本身仍在清單中且不會被當一般檔複製。
-	if _, ok := entries["link.txt"]; !ok {
-		t.Error("link.txt 應存在於快照")
+	if _, ok := entries["rel-link.txt"]; !ok {
+		t.Error("rel-link.txt 應存在於快照")
 	}
 }
 
@@ -255,21 +249,12 @@ func TestCreateSameContentReusesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("第一次 Create: %v", err)
 	}
-	// 在快照內刪一個檔做記號：若第二次 Create 真的重用（不重複複製），
-	// 記號檔會保持消失；若重新複製則會復原。
-	marker := filepath.Join(s1.Dir, "README.md")
-	if err := os.Remove(marker); err != nil {
-		t.Fatal(err)
-	}
 	s2, err := Create(repo, cache, nil)
 	if err != nil {
 		t.Fatalf("第二次 Create: %v", err)
 	}
 	if s1.ID != s2.ID || s1.Dir != s2.Dir || s1.TreeHash != s2.TreeHash {
 		t.Errorf("同內容應回相同 snapshot：s1=%+v s2=%+v", s1, s2)
-	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Error("同 snapshot_id 應直接重用不重複複製（記號檔被復原代表重新複製了）")
 	}
 	// 暫存目錄不應殘留。
 	rest, err := os.ReadDir(filepath.Join(cache, "snapshots"))
@@ -333,6 +318,22 @@ func TestCreateContentChangeChangesID(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsTamperedReusableSnapshot(t *testing.T) {
+	repo := t.TempDir()
+	writeRepo(t, repo)
+	cache := t.TempDir()
+	s, err := Create(repo, cache, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, "src", "main.py"), []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(repo, cache, nil); err == nil {
+		t.Fatal("遭竄改的同 ID snapshot 不得重用")
+	}
+}
+
 func TestCreateEmptyRepo(t *testing.T) {
 	repo := t.TempDir() // 空目錄
 	cache := t.TempDir()
@@ -376,6 +377,29 @@ func TestCreateRejectsBadInputs(t *testing.T) {
 	}
 	if _, err := Create(repo, "", nil); err == nil {
 		t.Error("空 cacheDir 應回傳錯誤")
+	}
+}
+
+func TestCreateNeverCopiesPrivateKeyFiles(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "server.pem"), []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "id_ed25519"), []byte("private"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "app.py"), []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Create(repo, t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "server.pem")); !os.IsNotExist(err) {
+		t.Fatalf("server.pem 被複製：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "id_ed25519")); !os.IsNotExist(err) {
+		t.Fatalf("id_ed25519 被複製：%v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aegis-dev/aegis/internal/packs"
@@ -68,7 +69,19 @@ func TestPackAdapterImagesJSONFallback(t *testing.T) {
 		t.Fatalf("解析結果非 digest：%q", tmpl.Image)
 	}
 
+	oldDigest := "aegis-python-web@sha256:" + strings.Repeat("a", 64)
+	newDigest := "aegis-python-web@sha256:" + strings64
+	pack.Manifest.Templates[0].Image = oldDigest
+	if err := RecordImage(cachePath, oldDigest, newDigest); err != nil {
+		t.Fatal(err)
+	}
+	tmpl, err = NewPackView(pack, cachePath).Template(pack.Manifest.Templates[0].TemplateID)
+	if err != nil || tmpl.Image != newDigest {
+		t.Fatalf("doctor cache 未覆寫舊 manifest digest：image=%q err=%v", tmpl.Image, err)
+	}
+
 	// 無任何記錄 → 解析序用盡 → error（§17.10 第 4 步：不自動構建）。
+	pack.Manifest.Templates[0].Image = "aegis-python-web"
 	pv2 := NewPackView(pack, "")
 	if _, err := pv2.Template(pack.Manifest.Templates[0].TemplateID); err == nil {
 		t.Fatal("映像解析序用盡應回 error（不自動構建）")

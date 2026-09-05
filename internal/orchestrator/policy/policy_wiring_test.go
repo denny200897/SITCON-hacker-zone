@@ -13,7 +13,7 @@ func TestCompileSplitContainerWiring(t *testing.T) {
 	spec["target_symbol"] = "app.UserRepo.find_by_name"
 	spec["wiring"] = map[string]any{
 		"setup": []any{
-			map[string]any{"method": "seed", "args": []any{[]any{"alice", "{{NONCE}}"}}},
+			map[string]any{"method": "seed", "args": []any{[]any{"alice", "bob"}}},
 			map[string]any{"method": "warmup", "args": []any{"x", 3, true, nil}},
 		},
 	}
@@ -40,7 +40,7 @@ func TestCompileSplitContainerWiring(t *testing.T) {
 		t.Fatalf("driver.cmd 不符：%v", dcmd)
 	}
 
-	// target.files：binding.json 為純資料（module/class/method＋setup；nonce 已替換）。
+	// target.files：binding.json 為純資料（module/class/method＋setup）；setup 禁止 nonce。
 	tgt, ok := rr["target"].(map[string]any)
 	if !ok {
 		t.Fatalf("缺 target：%#v", rr)
@@ -68,8 +68,8 @@ func TestCompileSplitContainerWiring(t *testing.T) {
 	if len(bd.Setup) != 2 || bd.Setup[0].Method != "seed" || len(bd.Setup[0].Args) != 1 {
 		t.Fatalf("binding setup 不符：%s", binding)
 	}
-	if strings.Contains(binding, "{{NONCE}}") {
-		t.Fatalf("binding 內 nonce 應已替換：%s", binding)
+	if strings.Contains(binding, "{{NONCE}}") || strings.Contains(binding, testNonce) {
+		t.Fatalf("binding setup 不得含 nonce：%s", binding)
 	}
 
 	// 容器 T 的 cmd 仍是 entrypoint（role 由 orchestrator 依 driver 鍵補上）。

@@ -148,6 +148,16 @@ func TestResolveModelUnset(t *testing.T) {
 	}
 }
 
+func TestResolveBudgetPerFieldPrecedence(t *testing.T) {
+	user := &Config{Budget: Budget{MaxEnvFixesPerFinding: 2, MaxHypothesesPerFinding: 7}}
+	repo := &Config{Budget: Budget{MaxHypothesesPerFinding: 9, MaxSandboxMinutesPerFinding: 4}}
+	got := ResolveBudget(repo, user)
+	if got.MaxEnvFixesPerFinding != 2 || got.MaxHarnessFixesPerFinding != 8 ||
+		got.MaxHypothesesPerFinding != 9 || got.MaxSandboxMinutesPerFinding != 4 {
+		t.Fatalf("ResolveBudget = %#v", got)
+	}
+}
+
 // validateRefCases：§3.1 "<provider>/<model-id>" 語法的接受／拒絕閉集。
 func TestValidateRefCases(t *testing.T) {
 	valid := []string{

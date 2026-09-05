@@ -122,6 +122,7 @@ func setupE2E(t *testing.T) (*orchestrator.Prover, string) {
 		Store:          store,
 		Pack:           pack,
 		PackDir:        packDir,
+		SchemasDir:     filepath.Join(repoRoot, "schemas"),
 		SnapshotID:     snap.ID,
 		SnapshotDir:    snap.Dir,
 		RunDir:         runDir,

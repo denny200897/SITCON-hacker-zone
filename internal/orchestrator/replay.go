@@ -46,6 +46,18 @@ func ReplayBundle(pack *packs.Pack, runDir string) error {
 				return fmt.Errorf("orchestrator: replay: run %s artifact %s hash 不一致", runID, name)
 			}
 		}
+		requestData, err := os.ReadFile(filepath.Join(ev.artifactsDir, "run_request.json"))
+		if err != nil {
+			return fmt.Errorf("orchestrator: replay: run %s 缺 run_request.json: %w", runID, err)
+		}
+		requestDoc, err := evidence.Decode(requestData)
+		if err != nil {
+			return fmt.Errorf("orchestrator: replay: run %s run_request.json 非法: %w", runID, err)
+		}
+		requestHash, err := evidence.Hash(requestDoc)
+		if err != nil || requestHash != ev.runRequestHash {
+			return fmt.Errorf("orchestrator: replay: run %s run_request_hash 不一致", runID)
+		}
 		// vuln oracle 重驗。
 		vuln, err := recheckRule(pack, ev.oracleID, ev.nonce, ev.artifactsDir)
 		if err != nil {
@@ -96,6 +108,7 @@ type runResult struct {
 	vuln           bool
 	touch          bool
 	artifactHashes map[string]string
+	runRequestHash string
 }
 
 // loadRunResults 掃 evidence 目錄的 run_result EV。
@@ -133,6 +146,10 @@ func loadRunResults(evidenceDir string) (map[string]runResult, error) {
 		touchDoc, _ := oracle["touch"].(map[string]any)
 		touch, _ := touchDoc["result"].(bool)
 		rr, _ := m["run_result"].(map[string]any)
+		runRequestHash, _ := m["run_request_hash"].(string)
+		if runRequestHash == "" {
+			return nil, fmt.Errorf("orchestrator: replay: %s 缺 run_request_hash", name)
+		}
 		hashes := map[string]string{}
 		if raw, ok := rr["artifact_hashes"].(map[string]any); ok {
 			for name, value := range raw {
@@ -145,7 +162,8 @@ func loadRunResults(evidenceDir string) (map[string]runResult, error) {
 			return nil, fmt.Errorf("orchestrator: replay: %s 欄位不完整", name)
 		}
 		art := filepath.Join(filepath.Dir(evidenceDir), "evidence", "runs", runID)
-		out[runID] = runResult{oracleID: oracleID, nonce: nonce, artifactsDir: art, kindLabel: kind, vuln: vuln, touch: touch, artifactHashes: hashes}
+		out[runID] = runResult{oracleID: oracleID, nonce: nonce, artifactsDir: art, kindLabel: kind, vuln: vuln, touch: touch,
+			artifactHashes: hashes, runRequestHash: runRequestHash}
 	}
 	return out, nil
 }

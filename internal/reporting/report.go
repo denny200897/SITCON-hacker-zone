@@ -120,6 +120,13 @@ func sarifResults(findings []Finding) []any {
 			"level":   level,
 			"message": map[string]any{"text": str(f["rationale"])},
 		}
+		if file := str(sink["file"]); file != "" {
+			location := map[string]any{"artifactLocation": map[string]any{"uri": filepath.ToSlash(file)}}
+			if line := intValue(sink["line"]); line > 0 {
+				location["region"] = map[string]any{"startLine": line}
+			}
+			result["locations"] = []any{map[string]any{"physicalLocation": location}}
+		}
 		if reach, ok := f["reachability"].(string); ok {
 			result["properties"] = map[string]any{
 				"aegis.reachability": reach,
@@ -228,8 +235,12 @@ func writeFinding(b *strings.Builder, f Finding) {
 	b.WriteString("### 未來開發注意事項\n\n")
 	miss := strList(f["missing_links"])
 	if len(miss) > 0 {
+		tripwireState := "尚未建立絆線"
+		if len(strList(f["guardrails"])) > 0 {
+			tripwireState = "已有已驗證絆線"
+		}
 		for _, m := range miss {
-			fmt.Fprintf(b, "- 缺環節（絆線已備）：%s\n", m)
+			fmt.Fprintf(b, "- 缺環節（%s）：%s\n", tripwireState, m)
 		}
 	} else {
 		b.WriteString("- 本 finding 已形成完整攻擊鏈；修復前請勿擴大相關輸入面。\n")
@@ -245,6 +256,22 @@ func writeFinding(b *strings.Builder, f Finding) {
 func str(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+func intValue(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case json.Number:
+		value, _ := n.Int64()
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func asMap(v any) map[string]any {

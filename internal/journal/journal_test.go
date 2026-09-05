@@ -226,6 +226,20 @@ func TestPayloadCanonical(t *testing.T) {
 	}
 }
 
+func TestAppendSecretPayloadFailsClosed(t *testing.T) {
+	j := openTest(t)
+	if _, err := j.Append("stage_completed", "", map[string]any{"output": "AKIAIOSFODNN7EXAMPLE"}); err == nil {
+		t.Fatal("secret payload 不得寫入 journal")
+	}
+	var count int
+	if err := j.db.QueryRow(`SELECT COUNT(*) FROM events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("secret gate 後仍寫入 %d 筆事件", count)
+	}
+}
+
 // TestEventsSchemaCompat 用 schemav 對樣本事件驗證 schemas/journal_event.schema.json
 // （機讀真源，§5：不得只依範例推測）。
 func TestEventsRoundTripSchema(t *testing.T) {

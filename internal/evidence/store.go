@@ -211,7 +211,8 @@ func buildBundleManifest(dir string) (map[string]any, error) {
 	sort.Strings(names)
 	items := make([]any, 0, len(names))
 	tail := ""
-	for index, name := range names {
+	lastSeq := 0
+	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
@@ -221,9 +222,14 @@ func buildBundleManifest(dir string) (map[string]any, error) {
 			return nil, err
 		}
 		id, _ := doc["id"].(string)
-		if id+".json" != name || id != fmt.Sprintf("EV-%04d", index+1) {
-			return nil, fmt.Errorf("evidence: non-contiguous evidence sequence at %s", name)
+		var seq int
+		if id+".json" != name || !evidenceIDPattern.MatchString(id) {
+			return nil, fmt.Errorf("evidence: invalid evidence filename/id at %s", name)
 		}
+		if _, err := fmt.Sscanf(id, "EV-%04d", &seq); err != nil || seq <= lastSeq {
+			return nil, fmt.Errorf("evidence: non-monotonic evidence sequence at %s", name)
+		}
+		lastSeq = seq
 		hash, err := Hash(doc)
 		if err != nil {
 			return nil, err

@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+func TestScanLinesReportsEachRepeatedMatchAtItsOwnLine(t *testing.T) {
+	src := "x = os.environ.get(\"TOKEN\")\n# gap\ny = os.environ.get(\"TOKEN\")\n"
+	matches := scanLines(osEnvRe, src)
+	if len(matches) != 2 || matches[0].line != 1 || matches[1].line != 3 {
+		t.Fatalf("matches = %#v", matches)
+	}
+}
+
 func writeRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()

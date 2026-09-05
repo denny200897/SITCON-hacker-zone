@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	"github.com/aegis-dev/aegis/internal/journal"
 	"github.com/aegis-dev/aegis/internal/llm"
 	"github.com/aegis-dev/aegis/internal/orchestrator/budget"
+	"github.com/aegis-dev/aegis/internal/orchestrator/policy"
 	"github.com/aegis-dev/aegis/internal/redaction"
 )
 
@@ -122,7 +124,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 	freshRound := false // fresh-eyes 進行中：任何非 PROVEN 結果即進終態、不扣預算
 	var pendingTerminal *budget.Stop
 	lastFailSig := "" // 最近一次 harness 分類的失敗簽名（振盪偵測 §9.3）
-	sandboxStart := time.Now()
+	awaitingNoMoreConfirmation := false
 
 	// pendingSpec 由閘 (b) 核可後填入；session 結束後由迴圈取出。
 	var pendingSpec map[string]any
@@ -145,15 +147,6 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 	var learned []string // 各輪 preamble 的「學到」行（rationale 素材）
 
 	for {
-		// 沙箱時數上限（§9.3：防 hang）。
-		counters.SandboxSecUsed = int(time.Since(sandboxStart).Seconds())
-		if ap.Budget.SandboxExceeded(counters) {
-			rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotProven),
-				FailureClass: string(domain.FailureHarness), Note: "sandbox_budget"}
-			return ap.terminal(domain.VerificationNotProven, domain.NotProvenSandboxBudget,
-				domain.FailureHarness, append(attempts, rec), learned, "")
-		}
-
 		ap.Tools.ResetSession()
 		runtime := &agent.Runtime{Adapter: ap.Adapter, Tools: ap.Tools, MaxTurns: ap.sessionTurns(), StopOnAccepted: true}
 		resp, history, err := runtime.Run(ctx, ap.chatRequest(msgs))
@@ -161,6 +154,26 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 			return nil, fmt.Errorf("orchestrator: rejected-spec journal: %w", fatalJournalErr)
 		}
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotProven), Note: "user_cancelled"}
+				return ap.terminal(domain.VerificationNotProven, domain.NotProvenUserCancelled, "", append(attempts, rec), learned, "")
+			}
+			if errors.Is(err, agent.MaxTurnsExceededError) {
+				rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotRun),
+					FailureClass: string(domain.FailureHarness), Note: "tool_loop_max_turns"}
+				attempts = append(attempts, rec)
+				if freshRound {
+					return ap.terminal(domain.Verification(pendingTerminal.Terminal), pendingTerminal.Reason,
+						domain.FailureHarness, attempts, learned, "")
+				}
+				stop := ap.Budget.OnFailure(budget.Verdict{Class: domain.FailureHarness}, &counters, 0)
+				if stop != nil {
+					return ap.stopResult(stop, attempts, learned, "")
+				}
+				msgs = append(msgs, userText(ap.operatorError("tool loop 回合用盡；請縮短調查並提交一個 WitnessSpec")))
+				feedbackSeen = true
+				continue
+			}
 			// LLM／transport 失敗（§19 第 0 點）→ env；fresh 輪直接進終態。
 			rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotRun),
 				FailureClass: string(domain.FailureEnv), Note: "llm_transport: " + bounded(err.Error(), 512)}
@@ -203,13 +216,20 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 			rec := AttemptRecord{Seq: len(attempts) + 1, Verification: string(domain.VerificationNotRun),
 				Preamble: bounded(finalText, 512)}
 			switch {
-			case feedbackSeen && strings.Contains(finalText, NoMoreHypothesesMarker):
-				// 模型明示「無後續假設」→ HYPOTHESIS_REJECTED（§9.3）。
+			case awaitingNoMoreConfirmation && exactNoMoreHypotheses(finalText):
+				// 只有在一次 controlled miss 後，並經獨立回合精確確認，才接受
+				// 「無後續假設」。避免否定句、引用 repo 文字或 prompt injection
+				// 以 substring 提前終止證明流程。
 				rec.Verification = string(domain.VerificationHypothesisRej)
 				rec.FailureClass = string(domain.FailureControlledMiss)
 				rec.Note = NoMoreHypothesesMarker
 				return ap.terminal(domain.VerificationHypothesisRej, "", domain.FailureControlledMiss,
 					append(attempts, rec), learned, "")
+			case feedbackSeen && hasControlledMiss(attempts) && exactNoMoreHypotheses(finalText):
+				awaitingNoMoreConfirmation = true
+				msgs = history
+				msgs = append(msgs, userText(ap.operatorError("若確實已無其他攻擊鏈假設，請在下一回合只輸出唯一一行："+NoMoreHypothesesMarker)))
+				continue
 			case freshRound:
 				// fresh 輪未提交 → 進 pendingTerminal（假設用盡的終態）。
 				rec.Verification = string(domain.VerificationNotRun)
@@ -242,13 +262,41 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 		rec := AttemptRecord{Seq: len(attempts) + 1, SpecHash: hash,
 			Payload: bounded(strField(spec, "payload"), 512), Preamble: bounded(finalText, 512)}
 
+		sandboxRunStart := time.Now()
 		res, perr := ap.Prove(ctx, ProveInput{
 			FindingID:    ap.Finding.FindingID,
 			Reachability: ap.Finding.Reachability,
 			Spec:         spec,
 		})
+		sandboxElapsed := time.Since(sandboxRunStart)
+		// 只累計實際 deterministic prover/sandbox 所用時間；LLM 等待不屬於
+		// sandbox budget。向上取整，避免大量不足一秒的執行永遠不計入。
+		counters.SandboxSecUsed += int((sandboxElapsed + time.Second - 1) / time.Second)
 		if perr != nil {
+			if errors.Is(perr, context.Canceled) {
+				rec.Verification = string(domain.VerificationNotProven)
+				rec.Note = "user_cancelled"
+				return ap.terminal(domain.VerificationNotProven, domain.NotProvenUserCancelled, "", append(attempts, rec), learned, "")
+			}
+			var specErr *policy.SpecError
+			if errors.As(perr, &specErr) {
+				// policy compiler 拒收表示模型提交的 spec 不合規，不是環境故障；
+				// 不扣 env 預算，落 journal 後要求模型修正並重送。
+				if err := ap.journalSpecRejected(specErr.Reason); err != nil {
+					return nil, fmt.Errorf("orchestrator: rejected-spec journal: %w", err)
+				}
+				rec.Verification = string(domain.VerificationNotRun)
+				rec.Note = "spec_rejected: " + specErr.Reason
+				attempts = append(attempts, rec)
+				msgs = history
+				msgs = append(msgs, userText(ap.operatorError(specErr.Error())))
+				feedbackSeen = true
+				continue
+			}
 			// 決定性 harness 例外（docker 不可用等）→ env（§19 第 1 點）。
+			// 環境修正後必須能原樣重跑同一 spec；duplicate_spec 只阻擋模型
+			// 重複假設，不應阻擋「不改程式、修環境後重跑」。
+			delete(seenHashes, hash)
 			rec.Verification = string(domain.VerificationNotRun)
 			rec.FailureClass = string(domain.FailureEnv)
 			rec.Note = "prove_error: " + bounded(perr.Error(), 512)
@@ -265,6 +313,13 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 			msgs = append(msgs, userText(ap.operatorError(perr.Error())))
 			feedbackSeen = true
 			continue
+		}
+		if ap.Budget.SandboxExceeded(counters) {
+			rec.Verification = string(domain.VerificationNotProven)
+			rec.FailureClass = string(domain.FailureHarness)
+			rec.Note = "sandbox_budget"
+			return ap.terminal(domain.VerificationNotProven, domain.NotProvenSandboxBudget,
+				domain.FailureHarness, append(attempts, rec), learned, res.OracleID)
 		}
 
 		rec.Runs = res.Runs
@@ -297,6 +352,9 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 			lastFailSig = sig
 		}
 		stop := ap.Budget.OnFailure(v, &counters, same)
+		if res.FailureClass == domain.FailureEnv {
+			delete(seenHashes, hash)
+		}
 
 		if stop != nil {
 			// fresh-eyes 最後一輪（§9.3）：假設用盡時開全新 session（不帶先前
@@ -306,7 +364,8 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 				freshRound = true
 				pendingTerminal = stop
 				msgs = []llm.Message{userText(ap.findingPrompt(true))}
-				seenHashes = map[string]bool{} // fresh session 允許全新假設空間
+				// duplicate_spec 的範圍是整個 finding；fresh-eyes 只重置對話，
+				// 不得忘記先前已提交過的內容 hash。
 				feedbackSeen = false
 				continue
 			}
@@ -318,6 +377,19 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 		msgs = append(msgs, userText(ap.operatorRunOutcome(res, counters)))
 		feedbackSeen = true
 	}
+}
+
+func exactNoMoreHypotheses(text string) bool {
+	return strings.TrimSpace(text) == NoMoreHypothesesMarker
+}
+
+func hasControlledMiss(attempts []AttemptRecord) bool {
+	for _, attempt := range attempts {
+		if attempt.FailureClass == string(domain.FailureControlledMiss) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- 終態組裝與落檔 ----

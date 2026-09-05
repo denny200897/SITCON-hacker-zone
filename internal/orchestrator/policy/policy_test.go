@@ -454,6 +454,17 @@ func TestSecretScanCoversPayloadAndFiles(t *testing.T) {
 	}
 }
 
+func TestRejectNoncePlaceholderInWiringSetup(t *testing.T) {
+	spec := baseSpec()
+	spec["wiring"] = map[string]any{"setup": []any{map[string]any{
+		"method": "raw_query", "args": []any{"SELECT '{{NONCE}}'"},
+	}}}
+	pack := testPack()
+	pack.templates["py/http-endpoint/v3"].ObserverImage = "observer@sha256:" + strings.Repeat("cd", 32)
+	in := compileInput(spec, func(in *Input) { in.PackView = pack })
+	expectReject(t, in, ReasonBadWiring)
+}
+
 // ---- §17.9-6：assumptions ----
 
 func TestRejectMissingAssumptions(t *testing.T) {

@@ -301,7 +301,7 @@ func Compile(in Input, nonce string) (map[string]any, error) {
 	// target_harness.py 解析；單容器路徑不需要 binding（service cmd 已足夠）。
 	var binding string
 	if tmpl.ObserverImage != "" {
-		b, berr := buildBinding(targetSymbol, in.Spec["wiring"], nonce, in.SecretScan)
+		b, berr := buildBinding(targetSymbol, in.Spec["wiring"], in.SecretScan)
 		if berr != nil {
 			return nil, berr
 		}
@@ -334,28 +334,25 @@ func validWiringLiteral(v any) bool {
 // identifierRe 檢查 wiring method 名為 Python identifier（與 ASTCheck 的符號段一致）。
 var identifierRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// nonceLiteral 遞迴對字面值內所有字串做 §17.2 nonce 替換（§17.2：wiring args
-// 允許 placeholder，與 payload／generated_files 同規則）。
-func nonceLiteral(v any, nonce string) any {
+func containsNoncePlaceholder(v any) bool {
 	switch t := v.(type) {
 	case string:
-		return replaceNonce(t, nonce)
+		return strings.Contains(t, "{{NONCE}}") || strings.Contains(t, "{{NONCE_HEX}}")
 	case []any:
-		out := make([]any, len(t))
-		for i, e := range t {
-			out[i] = nonceLiteral(e, nonce)
+		for _, e := range t {
+			if containsNoncePlaceholder(e) {
+				return true
+			}
 		}
-		return out
-	default:
-		return v
 	}
+	return false
 }
 
 // buildBinding 把 target_symbol＋wiring 編譯成 target/binding.json 內容。
 // 驗證失敗回 *SpecError（ReasonBadWiring／ReasonSecretInSpec）；輸出為
 // {"module","class","method","setup":[{"method","args":[字面值]}]}，args 內
 // 已做 §17.2 nonce 替換。整份序列化 ≤ WiringBytesMax。
-func buildBinding(targetSymbol string, rawWiring any, nonce string, secretScan func(string) bool) (string, error) {
+func buildBinding(targetSymbol string, rawWiring any, secretScan func(string) bool) (string, error) {
 	segs := strings.Split(targetSymbol, ".")
 	if len(segs) < 2 {
 		return "", specErr(ReasonBadWiring)
@@ -403,10 +400,12 @@ func buildBinding(targetSymbol string, rawWiring any, nonce string, secretScan f
 			}
 			args := make([]any, 0, len(rawArgs))
 			for _, a := range rawArgs {
-				if !validWiringLiteral(a) {
+				// §17.2 只授權 payload/generated_files 使用 nonce placeholder。
+				// setup 在 sink 呼叫前執行；允許 nonce 會讓它偽造 positive touch。
+				if !validWiringLiteral(a) || containsNoncePlaceholder(a) {
 					return "", specErr(ReasonBadWiring)
 				}
-				args = append(args, nonceLiteral(a, nonce))
+				args = append(args, a)
 			}
 			setup = append(setup, map[string]any{"method": m, "args": args})
 		}

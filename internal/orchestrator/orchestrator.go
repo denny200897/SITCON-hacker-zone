@@ -83,16 +83,18 @@ func (a *packAdapter) Oracle(id string) (*policy.Oracle, error) {
 // resolveImage 依 §17.10 映像解析序：digest → manifest.images → 本地 images.json。
 // 三步皆無 → error（呼叫端歸 ENV_ERROR；不自動構建，§17.10）。
 func (a *packAdapter) resolveImage(ref string) (string, error) {
+	// /doctor 以原 manifest ref 為 key 記錄本機重建後的新 digest；即使 ref
+	// 本身已是舊 digest，也要先讓 cache 覆寫，否則該修復記錄永遠不可達。
+	if a.cachePath != "" && ref != "" {
+		if d, ok := lookupImagesJSON(a.cachePath, ref); ok && isDigestImage(d) {
+			return d, nil
+		}
+	}
 	if isDigestImage(ref) {
 		return ref, nil
 	}
 	if d, ok := a.pack.Manifest.Images[ref]; ok && isDigestImage(d) {
 		return d, nil
-	}
-	if a.cachePath != "" && ref != "" {
-		if d, ok := lookupImagesJSON(a.cachePath, ref); ok && isDigestImage(d) {
-			return d, nil
-		}
 	}
 	return "", fmt.Errorf("映像 %q 無 digest 可用（§17.10 解析序用盡；請以 /doctor 本地構建後重錄 digest）", ref)
 }

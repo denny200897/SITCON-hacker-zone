@@ -12,6 +12,7 @@ import (
 
 	"github.com/aegis-dev/aegis/internal/domain"
 	"github.com/aegis-dev/aegis/internal/evidence"
+	"github.com/aegis-dev/aegis/internal/redaction"
 
 	// 純 Go SQLite driver（§16：單 binary 交叉編譯的前提）。
 	_ "modernc.org/sqlite"
@@ -162,6 +163,9 @@ func (j *Journal) Append(eventType, findingID string, payload map[string]any) (i
 	raw, err := evidence.CanonicalBytes(payload)
 	if err != nil {
 		return 0, fmt.Errorf("journal: canonical payload: %w", err)
+	}
+	if hits := redaction.Scan(string(raw)); len(hits) > 0 {
+		return 0, fmt.Errorf("journal: secret gate refused payload: %v", hits)
 	}
 
 	res, err := j.db.Exec(

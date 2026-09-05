@@ -53,6 +53,8 @@ type Options struct {
 	DockerBin string
 	// PackDirs 是待檢查的 pack 目錄（絕對路徑；各自含 manifest.json 與 image/Dockerfile）。
 	PackDirs []string
+	// SchemasDir 非空時明示 embedded/materialized schemas，避免依賴目前工作目錄。
+	SchemasDir string
 	// CachePath 是 ~/.cache/aegis/images.json（§17.10 digest 記錄）；空值表示
 	// 只檢查不記錄（記錄步驟略過、構建後仍須取得 repo digest 才算通過）。
 	CachePath string
@@ -226,7 +228,13 @@ func checkPacks(ctx context.Context, o Options) []Check {
 	bin := dockerBin(o)
 	for _, dir := range dirs {
 		name := filepath.Base(dir)
-		pack, err := loadPackFn(dir)
+		var pack *packs.Pack
+		var err error
+		if o.SchemasDir != "" {
+			pack, err = packs.LoadWithSchemas(dir, o.SchemasDir, false)
+		} else {
+			pack, err = loadPackFn(dir)
+		}
 		if err != nil {
 			out = append(out, Check{Name: "pack:" + name, OK: false,
 				Detail: trunc("pack 載入失敗（拒載，§6.4）：" + err.Error())})

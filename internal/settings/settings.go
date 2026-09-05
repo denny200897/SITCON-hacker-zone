@@ -53,6 +53,42 @@ type Provider struct {
 type Config struct {
 	Providers map[string]Provider `toml:"providers"`
 	Models    map[string]string   `toml:"models"`
+	Budget    Budget              `toml:"budget"`
+}
+
+// Budget 對應 [budget]；0 表示該層未設定，由較低優先層或規格預設補上。
+type Budget struct {
+	MaxEnvFixesPerFinding       int `toml:"max_env_fixes_per_finding"`
+	MaxHarnessFixesPerFinding   int `toml:"max_harness_fixes_per_finding"`
+	MaxHypothesesPerFinding     int `toml:"max_hypotheses_per_finding"`
+	MaxSandboxMinutesPerFinding int `toml:"max_sandbox_minutes_per_finding"`
+}
+
+// ResolveBudget 套用 repo > user > SPEC 預設值。各欄可獨立覆寫。
+func ResolveBudget(repo, user *Config) Budget {
+	result := Budget{MaxEnvFixesPerFinding: 5, MaxHarnessFixesPerFinding: 8,
+		MaxHypothesesPerFinding: 3, MaxSandboxMinutesPerFinding: 10}
+	apply := func(value Budget) {
+		if value.MaxEnvFixesPerFinding > 0 {
+			result.MaxEnvFixesPerFinding = value.MaxEnvFixesPerFinding
+		}
+		if value.MaxHarnessFixesPerFinding > 0 {
+			result.MaxHarnessFixesPerFinding = value.MaxHarnessFixesPerFinding
+		}
+		if value.MaxHypothesesPerFinding > 0 {
+			result.MaxHypothesesPerFinding = value.MaxHypothesesPerFinding
+		}
+		if value.MaxSandboxMinutesPerFinding > 0 {
+			result.MaxSandboxMinutesPerFinding = value.MaxSandboxMinutesPerFinding
+		}
+	}
+	if user != nil {
+		apply(user.Budget)
+	}
+	if repo != nil {
+		apply(repo.Budget)
+	}
+	return result
 }
 
 // Load 讀取 path 的組態檔。檔案不存在 → 回傳空 Config + nil error
@@ -127,7 +163,8 @@ func encodeSorted(c *Config) ([]byte, error) {
 	doc := struct {
 		Providers map[string]Provider `toml:"providers"`
 		Models    map[string]string   `toml:"models"`
-	}{Providers: providers, Models: models}
+		Budget    Budget              `toml:"budget,omitempty"`
+	}{Providers: providers, Models: models, Budget: c.Budget}
 	var buf strings.Builder
 	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
 		return nil, err

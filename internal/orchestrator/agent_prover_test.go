@@ -15,6 +15,7 @@ import (
 	"github.com/aegis-dev/aegis/internal/journal"
 	"github.com/aegis-dev/aegis/internal/llm"
 	"github.com/aegis-dev/aegis/internal/orchestrator/budget"
+	"github.com/aegis-dev/aegis/internal/orchestrator/policy"
 )
 
 // ---- 測試替身 ----
@@ -27,6 +28,13 @@ type scriptAdapter struct {
 	i      int
 	reqs   []llm.ChatRequest
 }
+
+type cancelAdapter struct{}
+
+func (cancelAdapter) Chat(context.Context, llm.ChatRequest) (llm.Response, error) {
+	return llm.Response{}, context.Canceled
+}
+func (cancelAdapter) Provider() string { return "cancel" }
 
 func (s *scriptAdapter) Chat(_ context.Context, req llm.ChatRequest) (llm.Response, error) {
 	s.reqs = append(s.reqs, req)
@@ -134,7 +142,7 @@ func journalEvents(t *testing.T, j *journal.Journal) []journal.Event {
 func TestAgentProverEnvExhausted(t *testing.T) {
 	ad := &scriptAdapter{script: []llm.Response{
 		submitResp("s1", "{{NONCE}}'", ""),
-		submitResp("s2", "{{NONCE}}'-x", "學到：a\n改：b\n預期：c"),
+		submitResp("s2", "{{NONCE}}'", "學到：環境失敗\n改：環境已修正，spec 不變\n預期：可重新執行"),
 	}}
 	prove := &fakeProve{errs: []error{errors.New("docker unavailable"), errors.New("docker unavailable")}}
 	ap, j := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 3})
@@ -149,7 +157,7 @@ func TestAgentProverEnvExhausted(t *testing.T) {
 	if len(res.Attempts) != 2 {
 		t.Fatalf("應有 2 次嘗試日誌，得 %d", len(res.Attempts))
 	}
-	// 第二輪 spec 不同（hash 不同）才會被收下；驗證拒絕路徑外傳。
+	// 環境失敗後允許原樣重跑同一 spec，不被 duplicate_spec 擋住。
 	if prove.i != 2 {
 		t.Fatalf("應執行 2 次 Prove，得 %d", prove.i)
 	}
@@ -319,7 +327,8 @@ func TestAgentProverGateRejections(t *testing.T) {
 		submitResp("s2", "{{NONCE}}'", ""), submitResp("s3", "{{NONCE}}'-a", pre),
 		// 缺 {{NONCE}} → missing_nonce_placeholder；缺 preamble → missing_preamble；再正確提交
 		submitResp("s4", "no-placeholder", pre), submitResp("s5", "{{NONCE}}'-b", ""), submitResp("s6", "{{NONCE}}'-c", pre),
-		endResp("無後續假設"), // 之後明示無後續假設收斂
+		endResp("無後續假設"), // 第一次明示觸發獨立確認
+		endResp("無後續假設"), // 唯一一行再次確認後才收斂
 	}}
 	prove := &fakeProve{results: []*ProveResult{missResult(), missResult(), missResult()}}
 	ap, j := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 9})
@@ -380,14 +389,15 @@ func TestAgentProverProven(t *testing.T) {
 	}
 }
 
-// TestAgentProverNoSpecSession：session 未提交 spec → harness 分類續跑；
-// 之後明示「無後續假設」→ HYPOTHESIS_REJECTED。
+// TestAgentProverNoSpecSession：必須先有 controlled miss，且以獨立回合精確
+// 確認「無後續假設」，才能進 HYPOTHESIS_REJECTED。
 func TestAgentProverNoSpecAndMarker(t *testing.T) {
 	ad := &scriptAdapter{script: []llm.Response{
-		endResp("我想想"), // 未提交
+		submitResp("s1", "{{NONCE}}'", ""),
+		endResp("無後續假設"),
 		endResp("無後續假設"),
 	}}
-	prove := &fakeProve{}
+	prove := &fakeProve{results: []*ProveResult{missResult()}}
 	ap, _ := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 3})
 
 	res, err := ap.Run(context.Background())
@@ -397,8 +407,67 @@ func TestAgentProverNoSpecAndMarker(t *testing.T) {
 	if res.Verification != domain.VerificationHypothesisRej {
 		t.Fatalf("明示無後續假設應 HYPOTHESIS_REJECTED，得 %s", res.Verification)
 	}
-	if prove.i != 0 {
-		t.Fatalf("不應跑 Prove，得 %d", prove.i)
+	if prove.i != 1 {
+		t.Fatalf("應先完成一次 controlled miss，得 %d", prove.i)
+	}
+}
+
+func TestAgentProverNoMoreMarkerDoesNotMatchQuotedOrNegatedText(t *testing.T) {
+	pre := "學到：x\n改：y\n預期：z"
+	ad := &scriptAdapter{script: []llm.Response{
+		submitResp("s1", "{{NONCE}}'", ""),
+		endResp("不代表無後續假設，我會繼續"),
+		submitResp("s2", "{{NONCE}}'-next", pre),
+	}}
+	prove := &fakeProve{results: []*ProveResult{missResult(), {Verification: domain.VerificationProven}}}
+	ap, _ := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 2, MaxHarness: 4, MaxHypotheses: 3})
+	res, err := ap.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Verification != domain.VerificationProven {
+		t.Fatalf("否定句不得提前終止，得 %s", res.Verification)
+	}
+}
+
+func TestAgentProverPolicyRejectionDoesNotConsumeEnvBudget(t *testing.T) {
+	pre := "學到：target symbol 不存在\n改：改用真實 symbol\n預期：policy 接受"
+	ad := &scriptAdapter{script: []llm.Response{
+		submitResp("bad", "{{NONCE}}'", ""),
+		submitResp("good", "{{NONCE}}'-fixed", pre),
+	}}
+	prove := &fakeProve{
+		errs:    []error{fmt.Errorf("compile: %w", &policy.SpecError{Reason: policy.ReasonTargetSymbolMissing}), nil},
+		results: []*ProveResult{nil, {Verification: domain.VerificationProven}},
+	}
+	ap, j := newAgentProver(t, ad, prove.Prove, budget.Budget{MaxEnv: 1, MaxHarness: 2, MaxHypotheses: 2})
+	res, err := ap.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Verification != domain.VerificationProven {
+		t.Fatalf("policy 拒收不應耗盡 env budget，得 %s", res.Verification)
+	}
+	found := false
+	for _, event := range journalEvents(t, j) {
+		if event.Type == "witness_spec_rejected" && event.Payload["reason"] == policy.ReasonTargetSymbolMissing {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("缺 witness_spec_rejected(target_symbol_missing)")
+	}
+}
+
+func TestAgentProverUserCancellationIsNotEnvironmentFailure(t *testing.T) {
+	prove := &fakeProve{}
+	ap, _ := newAgentProver(t, cancelAdapter{}, prove.Prove, budget.Default())
+	res, err := ap.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Verification != domain.VerificationNotProven || res.NotProvenReason != domain.NotProvenUserCancelled {
+		t.Fatalf("cancel terminal = %s/%s", res.Verification, res.NotProvenReason)
 	}
 }
 

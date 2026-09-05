@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/aegis-dev/aegis/internal/domain"
@@ -32,11 +31,12 @@ import (
 
 // Prover 是一次證明工作的執行器（三控制 run；§5.2）。
 type Prover struct {
-	Runner  *sandbox.Runner
-	Journal *journal.Journal
-	Store   *evidence.Store
-	Pack    *packs.Pack
-	PackDir string // seccomp profile 來源（pack/sandbox/seccomp.json）
+	Runner     *sandbox.Runner
+	Journal    *journal.Journal
+	Store      *evidence.Store
+	Pack       *packs.Pack
+	PackDir    string // seccomp profile 來源（pack/sandbox/seccomp.json）
+	SchemasDir string // embedded/materialized schemas；不得依賴建置機 source path
 
 	SnapshotID  string
 	SnapshotDir string
@@ -87,6 +87,22 @@ type ProveResult struct {
 // exploit 只在 negative（vuln oracle 未誤觸發）與 positive（touch rule 命中）都通過後執行；
 // 順序由本函式強制，呼叫端無法破壞（guardrail，§5.2-3）。
 func (p *Prover) Prove(ctx context.Context, in ProveInput) (*ProveResult, error) {
+	// 在碰 Docker、分配 run ID 或執行任何控制 run 前，先完整走一次 policy
+	// compiler。如此 secret/missing assumptions/unknown oracle/AST 等 spec 拒收
+	// 不會等到 negative/positive 已執行後才被發現，也不會污染 env 預算。
+	if _, err := policy.Compile(policy.Input{
+		Spec: in.Spec, FindingReachability: in.Reachability, SnapshotDir: p.SnapshotDir,
+		PrevSpecHashes: p.PrevSpecHashes, SecretScan: func(s string) bool { return redaction.HasSecret(s) },
+		ASTCheck: ASTCheck, PackView: NewPackView(p.Pack, p.CachePath), RunID: "R-0000",
+		SnapshotID: p.SnapshotID, Kind: string(domain.RunExploit),
+	}, strings.Repeat("0", 32)); err != nil {
+		return nil, fmt.Errorf("orchestrator: policy preflight: %w", err)
+	}
+	if _, err := p.Journal.Append("witness_spec_submitted", in.FindingID, map[string]any{
+		"template_id": strField(in.Spec, "template_id"), "oracle_id": strField(in.Spec, "oracle_id"),
+	}); err != nil {
+		return nil, err
+	}
 	if err := p.Runner.Available(); err != nil {
 		return nil, fmt.Errorf("orchestrator: docker 不可用: %w", err)
 	}
@@ -194,21 +210,10 @@ func (p *Prover) runOne(ctx context.Context, seccomp string, in ProveInput, kind
 	if cerr != nil {
 		return nil, budget.Verdict{}, nil, fmt.Errorf("orchestrator: policy compile: %w", cerr)
 	}
-	for _, evt := range []struct {
-		typ string
-		doc map[string]any
-	}{
-		{"witness_spec_submitted", map[string]any{
-			"run_id": runID, "kind": kind,
-			"template_id": strField(spec, "template_id"), "oracle_id": strField(spec, "oracle_id"),
-		}},
-		{"run_requested", map[string]any{
-			"run_id": runID, "kind": kind, "image": strField(rr, "image"), "nonce": nonce,
-		}},
-	} {
-		if _, err := p.Journal.Append(evt.typ, in.FindingID, evt.doc); err != nil {
-			return nil, budget.Verdict{}, nil, err
-		}
+	if _, err := p.Journal.Append("run_requested", in.FindingID, map[string]any{
+		"run_id": runID, "kind": kind, "image": strField(rr, "image"), "nonce": nonce,
+	}); err != nil {
+		return nil, budget.Verdict{}, nil, err
 	}
 
 	_, evID, exit, rerr := p.executeRun(ctx, seccomp, rr, nonce, in, string(kind))
@@ -217,7 +222,9 @@ func (p *Prover) runOne(ctx context.Context, seccomp string, in ProveInput, kind
 	// 執行層錯誤（docker/reclaim 等）：歸 env，扣預算（§19 第 1 點）。
 	if rerr != nil {
 		v := budget.Verdict{Class: domain.FailureEnv}
-		p.journalBudget(in.FindingID, v)
+		if err := p.journalBudget(in.FindingID, v); err != nil {
+			return nil, budget.Verdict{}, nil, err
+		}
 		stop := p.Budget.OnFailure(v, counters, 0)
 		rec.Err = rerr.Error()
 		return rec, v, stop, nil
@@ -254,7 +261,9 @@ func (p *Prover) runOne(ctx context.Context, seccomp string, in ProveInput, kind
 	if cerr != nil {
 		return nil, budget.Verdict{}, nil, fmt.Errorf("orchestrator: classify %s %s: %w", kind, runID, cerr)
 	}
-	p.journalBudget(in.FindingID, v)
+	if err := p.journalBudget(in.FindingID, v); err != nil {
+		return nil, budget.Verdict{}, nil, err
+	}
 	stop := p.Budget.OnFailure(v, counters, 0)
 	return rec, v, stop, nil
 }
@@ -425,6 +434,15 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	if err != nil {
 		return "", evID, exit, fmt.Errorf("orchestrator: hash run request: %w", err)
 	}
+	requestBytes, err := evidence.CanonicalBytes(rr)
+	if err != nil {
+		return "", evID, exit, fmt.Errorf("orchestrator: encode run request: %w", err)
+	}
+	// 保存 nonce 替換後、實際交給 runner 的完整請求，讓離線 replay 能重算
+	// run_request_hash，而不是只相信 evidence 裡無來源的摘要值。
+	if err := redaction.WriteFile(filepath.Join(artDir, "run_request.json"), append(requestBytes, '\n'), 0o600); err != nil {
+		return "", evID, exit, fmt.Errorf("orchestrator: persist run request: %w", err)
+	}
 	artifacts := []string{}
 	artifactHashes := map[string]any{}
 	artifactRedactions := map[string]any{}
@@ -478,7 +496,7 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 			"touch": map[string]any{"oracle_id": touchOracleID(p.Pack, strField(rr, "oracle_id")), "result": touchResult}},
 		"created_by": "orchestrator", "verified_by": "checker",
 	}
-	if err := validateEvidenceDocument(doc); err != nil {
+	if err := validateEvidenceDocument(doc, p.SchemasDir); err != nil {
 		return "", evID, exit, err
 	}
 	if _, _, werr := p.Store.Write(doc, evID); werr != nil {
@@ -497,12 +515,10 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	return artDir, evID, exit, nil
 }
 
-func validateEvidenceDocument(doc map[string]any) error {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return fmt.Errorf("orchestrator: 無法定位 schemas")
+func validateEvidenceDocument(doc map[string]any, schemasDir string) error {
+	if schemasDir == "" {
+		return fmt.Errorf("orchestrator: schemas dir 未設定")
 	}
-	schemasDir := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "schemas"))
 	reg := schemav.New()
 	if err := reg.LoadDir(schemasDir); err != nil {
 		return fmt.Errorf("orchestrator: 載入 evidence schema: %w", err)
@@ -611,14 +627,15 @@ func (p *Prover) checkOracle(in ProveInput, kind, runID, nonce, which string) (b
 }
 
 // journalBudget 記錄 budget_updated（分類非空時）。
-func (p *Prover) journalBudget(findingID string, v budget.Verdict) {
+func (p *Prover) journalBudget(findingID string, v budget.Verdict) error {
 	if v.Class == "" {
-		return
+		return nil
 	}
-	_, _ = p.Journal.Append("budget_updated", findingID, map[string]any{
+	_, err := p.Journal.Append("budget_updated", findingID, map[string]any{
 		"failure_class": string(v.Class), "oracle_misfired": v.OracleMisfired,
 		"guardrail": v.Guardrail,
 	})
+	return err
 }
 
 // benignPayload 取 pack manifest 的 benign payload 內容（negative/positive 控制 run 用）。

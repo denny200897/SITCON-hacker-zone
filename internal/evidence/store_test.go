@@ -40,6 +40,24 @@ func TestStoreChainAndVerify(t *testing.T) {
 	}
 }
 
+func TestStoreAllowsJournalAllocationGapWithoutPoisoningBundle(t *testing.T) {
+	dir := t.TempDir()
+	s, err := NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// EV-0001 可在檔案落地前因 fail-closed 而被 journal 消耗；後續證據仍須可用。
+	if _, _, err := s.Write(map[string]any{"kind": "negative"}, "EV-0002"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Write(map[string]any{"kind": "positive"}, "EV-0003"); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyBundle(filepath.Join(dir, "evidence")); err != nil {
+		t.Fatalf("含配置 gap 的 bundle 應可驗證：%v", err)
+	}
+}
+
 func TestBundleManifestDetectsTailDeletionAndAddition(t *testing.T) {
 	for _, mutation := range []string{"tail", "delete", "add"} {
 		t.Run(mutation, func(t *testing.T) {

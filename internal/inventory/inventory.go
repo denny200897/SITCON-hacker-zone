@@ -285,10 +285,12 @@ type lineMatch struct {
 
 func scanLines(re *regexp.Regexp, src string) []lineMatch {
 	var out []lineMatch
-	for _, m := range re.FindAllStringSubmatch(src, -1) {
-		name := m[1]
-		line := 1 + strings.Count(src[:strings.Index(src, m[0])], "\n")
-		out = append(out, lineMatch{name: name, line: line, match: m[0]})
+	for _, loc := range re.FindAllStringSubmatchIndex(src, -1) {
+		if len(loc) < 4 || loc[0] < 0 || loc[1] < 0 || loc[2] < 0 || loc[3] < 0 {
+			continue
+		}
+		line := 1 + strings.Count(src[:loc[0]], "\n")
+		out = append(out, lineMatch{name: src[loc[2]:loc[3]], line: line, match: src[loc[0]:loc[1]]})
 	}
 	return out
 }

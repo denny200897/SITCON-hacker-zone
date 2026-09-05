@@ -324,6 +324,9 @@ func (t *ToolRegistry) semgrep(ctx context.Context, input json.RawMessage) Resul
 	if mErr != nil {
 		return Result{Content: "semgrep 序列化失敗：" + mErr.Error(), IsError: true}
 	}
+	if redaction.HasSecret(string(b)) {
+		return Result{Content: "policy_denied: semgrep 輸出命中 secret pattern，已停止（請先人工確認）", IsError: true}
+	}
 	return Result{Content: string(b)}
 }
 

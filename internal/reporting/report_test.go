@@ -79,12 +79,19 @@ func TestWriteSARIFValid(t *testing.T) {
 	if props["aegis.reachability"] != "D2" || props["aegis.verification"] != "PROVEN" {
 		t.Fatalf("props = %+v", props)
 	}
+	locations := r0["locations"].([]any)
+	physical := locations[0].(map[string]any)["physicalLocation"].(map[string]any)
+	if physical["artifactLocation"].(map[string]any)["uri"] != "app/db.py" || physical["region"].(map[string]any)["startLine"] != float64(88) {
+		t.Fatalf("SARIF location = %#v", physical)
+	}
 }
 
 func TestWriteReportMDThreeSectionsAndWitnessLabel(t *testing.T) {
 	dir := t.TempDir()
 	// D2 PROVEN：必須寫「合成見證下已證明」（§14-1）
-	path, err := WriteReportMD(dir, []Finding{sampleFinding("F-0007", "PROVEN", "D2")}, "out/run-1", testNow())
+	finding := sampleFinding("F-0007", "PROVEN", "D2")
+	finding["missing_links"] = []any{"route wiring"}
+	path, err := WriteReportMD(dir, []Finding{finding}, "out/run-1", testNow())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +104,9 @@ func TestWriteReportMDThreeSectionsAndWitnessLabel(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Fatalf("report.md missing %q", want)
 		}
+	}
+	if strings.Contains(s, "絆線已備") || !strings.Contains(s, "尚未建立絆線") {
+		t.Fatal("沒有 guardrail artifact 時不得宣稱絆線已備")
 	}
 	// 不得寫成「當前產品可從外部攻擊」為主張
 	if strings.Contains(s, "當前產品可從外部攻擊") && !strings.Contains(s, "不代表當前產品可從外部攻擊") {

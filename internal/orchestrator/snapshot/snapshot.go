@@ -85,6 +85,9 @@ func Create(repoRoot, cacheDir string, excludes []string) (Snapshot, error) {
 	}
 	dir1 := filepath.Join(cacheDir, "snapshots", id1)
 	if st, statErr := os.Stat(dir1); statErr == nil && st.IsDir() {
+		if err := Verify(dir1, id1, h1); err != nil {
+			return Snapshot{}, err
+		}
 		return Snapshot{ID: id1, Dir: dir1, TreeHash: h1}, nil // 重用，不重複複製
 	} else if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
 		return Snapshot{}, fmt.Errorf("snapshot: 檢查既有快照 %s: %w", dir1, statErr)
@@ -125,17 +128,45 @@ func Create(repoRoot, cacheDir string, excludes []string) (Snapshot, error) {
 	}
 
 	if st, statErr := os.Stat(dir2); statErr == nil && st.IsDir() {
+		if err := Verify(dir2, id2, h2); err != nil {
+			return Snapshot{}, err
+		}
 		return Snapshot{ID: id2, Dir: dir2, TreeHash: h2}, nil // 重用，不重複複製
 	}
 	if err := os.Rename(staging, dir2); err != nil {
 		// rename 失敗最常見原因是目的地已被佔用（併發建立）；確認後仍視為重用。
 		if st, statErr := os.Stat(dir2); statErr == nil && st.IsDir() {
+			if err := Verify(dir2, id2, h2); err != nil {
+				return Snapshot{}, err
+			}
 			return Snapshot{ID: id2, Dir: dir2, TreeHash: h2}, nil
 		}
 		return Snapshot{}, fmt.Errorf("snapshot: 落地快照 %s: %w", dir2, err)
 	}
 	staging = "" // 已 rename，交由 defer 前的清空避免誤刪
 	return Snapshot{ID: id2, Dir: dir2, TreeHash: h2}, nil
+}
+
+// Verify 重算既有 snapshot 的內容位址。任何竄改、損毀或目錄名稱與內容
+// 不一致都 fail closed；呼叫端應在掛載 snapshot 前再次驗證。
+func Verify(dir, expectedID, expectedTreeHash string) error {
+	entries, err := collect(dir, "", nil)
+	if err != nil {
+		return fmt.Errorf("snapshot: 驗證既有快照 %s: %w", dir, err)
+	}
+	actualHash, err := treeHash(entries)
+	if err != nil {
+		return err
+	}
+	actualID, err := snapshotID(actualHash)
+	if err != nil {
+		return err
+	}
+	if actualHash != expectedTreeHash || actualID != expectedID || filepath.Base(dir) != expectedID {
+		return fmt.Errorf("snapshot: 既有快照內容不符（dir=%s id=%s hash=%s；預期 id=%s hash=%s）",
+			dir, actualID, actualHash, expectedID, expectedTreeHash)
+	}
+	return nil
 }
 
 // collect 走訪 root（filepath.WalkDir，不跟隨 symlink），排除 .git 與 excludes。
@@ -189,6 +220,17 @@ func collect(root, dst string, exs []string) ([]entry, error) {
 			target, err := os.Readlink(path)
 			if err != nil {
 				return fmt.Errorf("snapshot: 讀取 symlink %s: %w", path, err)
+			}
+			resolved := target
+			if !filepath.IsAbs(resolved) {
+				resolved = filepath.Join(filepath.Dir(path), resolved)
+			}
+			resolved, err = filepath.Abs(resolved)
+			if err != nil {
+				return fmt.Errorf("snapshot: 解析 symlink %s: %w", path, err)
+			}
+			if resolved != root && !strings.HasPrefix(resolved, root+string(filepath.Separator)) {
+				return fmt.Errorf("snapshot: symlink %s 指向 snapshot 外（%s）", rel, target)
 			}
 			if dst != "" {
 				if err := os.Symlink(target, filepath.Join(dst, rel)); err != nil {
@@ -282,6 +324,20 @@ func snapshotID(treeHash string) (string, error) {
 // 規則為「路徑前綴比對」但以路徑段為界：exclude "build" 命中 "build" 與 "build/x.go"，
 // 不命中 "build.go"／"builder"。
 func excluded(rel string, exs []string) bool {
+	base := filepath.Base(rel)
+	if strings.HasSuffix(base, ".pyc") {
+		return true
+	}
+	for _, suffix := range []string{".pem", ".key", ".p12", ".pfx", ".jks"} {
+		if strings.HasSuffix(base, suffix) {
+			return true
+		}
+	}
+	for _, name := range []string{"id_rsa", "id_ed25519", "id_ecdsa", "credentials.json"} {
+		if base == name {
+			return true
+		}
+	}
 	for _, e := range exs {
 		if rel == e || strings.HasPrefix(rel, e+"/") {
 			return true

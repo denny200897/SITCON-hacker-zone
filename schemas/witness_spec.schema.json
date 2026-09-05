@@ -24,7 +24,7 @@
     },
     "wiring": {
       "type": "object",
-      "description": "宣告式 target 接線（ADR 0005）：policy 驗證後編成 target/binding.json；僅資料、不含可執行內容；args 允許 {{NONCE}} placeholder（§17.2）",
+      "description": "宣告式 target 接線（ADR 0005）：policy 驗證後編成 target/binding.json；僅資料、不含可執行內容；args 禁止 nonce placeholder，以免 setup 偽造 positive touch",
       "additionalProperties": false,
       "properties": {
         "setup": {

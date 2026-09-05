@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aegis-dev/aegis/internal/llm"
@@ -103,6 +104,36 @@ func TestExecuteReadCode(t *testing.T) {
 	}
 }
 
+// TestExecuteReadCodeRedactsSecretLikeSpans：一般原始碼常含 password/token
+// 賦值；工具應只遮蔽疑似值並繼續，不得因整檔任一命中而中止 reviewer。
+func TestExecuteReadCodeRedactsSecretLikeSpans(t *testing.T) {
+	dir := t.TempDir()
+	content := "password = user_supplied_value\nfunc safe() {}\n"
+	if err := os.WriteFile(filepath.Join(dir, "auth.go"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := newTestRegistry(t, dir)
+
+	res := reg.Execute(context.Background(), llm.RoleReviewer, "read_code",
+		json.RawMessage(`{"path":"auth.go","start":1,"end":2}`), "")
+	if res.IsError {
+		t.Fatalf("含疑似 secret 的原始碼不應整次拒絕：%s", res.Content)
+	}
+	if !strings.Contains(res.Content, "***REDACTED***") || !strings.Contains(res.Content, "func safe") {
+		t.Fatalf("應遮蔽命中段並保留其餘原始碼：%q", res.Content)
+	}
+	if strings.Contains(res.Content, "user_supplied_value") {
+		t.Fatalf("疑似 secret 值不應送給模型：%q", res.Content)
+	}
+
+	// requested range 外的疑似值不應讓安全行讀取失敗。
+	res = reg.Execute(context.Background(), llm.RoleReviewer, "read_code",
+		json.RawMessage(`{"path":"auth.go","start":2,"end":2}`), "")
+	if res.IsError || res.Content != "2: func safe() {}\n" {
+		t.Fatalf("範圍外命中不應影響讀取：%+v", res)
+	}
+}
+
 // TestExecuteSearchCode：RE2 lookahead 拒絕、命中格式、上限 50。
 func TestExecuteSearchCode(t *testing.T) {
 	dir := t.TempDir()
@@ -133,6 +164,22 @@ func TestExecuteSearchCode(t *testing.T) {
 	}
 	if _, ok := hits[0]["path"]; !ok {
 		t.Fatalf("命中格式缺 path 欄位：%#v", hits[0])
+	}
+}
+
+func TestExecuteSearchCodeRedactsSecretLikeSpans(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.py"), []byte("password = supersecretvalue\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := newTestRegistry(t, dir)
+	res := reg.Execute(context.Background(), llm.RoleReviewer, "search_code",
+		json.RawMessage(`{"query":"password"}`), "")
+	if res.IsError {
+		t.Fatalf("search_code 應遮蔽後繼續：%s", res.Content)
+	}
+	if !strings.Contains(res.Content, "***REDACTED***") || strings.Contains(res.Content, "supersecretvalue") {
+		t.Fatalf("search_code 遮蔽結果不符：%s", res.Content)
 	}
 }
 

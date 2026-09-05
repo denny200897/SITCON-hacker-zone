@@ -207,9 +207,6 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 	if err != nil {
 		return Result{Content: "read_code 失敗：" + err.Error(), IsError: true}
 	}
-	if redaction.HasSecret(string(data)) {
-		return Result{Content: "policy_denied: read_code 輸出命中 secret pattern，已停止（請先人工確認）", IsError: true}
-	}
 	lines := bytes.Split(data, []byte("\n"))
 	start, end := args.Start, args.End
 	if start < 1 {
@@ -233,7 +230,14 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 		buf.WriteByte('\n')
 		total += len(line) + 1
 	}
-	return Result{Content: buf.String()}
+	masked, patterns := redaction.Mask(buf.String())
+	if redaction.HasSecret(masked) {
+		return Result{Content: "policy_denied: read_code 遮蔽後仍命中 secret pattern（fail-closed）", IsError: true}
+	}
+	if len(patterns) > 0 {
+		masked = fmt.Sprintf("[secret-like spans redacted: %s]\n%s", strings.Join(patterns, ","), masked)
+	}
+	return Result{Content: masked}
 }
 
 // searchCode：純 Go regexp 逐檔掃描（不 shell out，§18.1）；query ≤256 字元、
@@ -258,7 +262,6 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 		Text string `json:"text"`
 	}
 	hits := make([]hit, 0, MaxSearchHits)
-	secretBlocked := false
 	walkErr := filepath.WalkDir(t.SnapshotDir, func(path string, d os.DirEntry, werr error) error {
 		if werr != nil || d.IsDir() || len(hits) >= MaxSearchHits {
 			return nil
@@ -277,10 +280,11 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 			}
 			if re.Match(line) {
 				text := string(line)
-				if redaction.HasSecret(text) {
-					secretBlocked = true
-					return filepath.SkipAll
+				masked, _ := redaction.Mask(text)
+				if redaction.HasSecret(masked) {
+					return nil
 				}
+				text = masked
 				if len(text) > MaxSearchLine {
 					text = text[:MaxSearchLine]
 				}
@@ -296,9 +300,6 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 	if walkErr != nil && walkErr != filepath.SkipAll {
 		// filepath.SkipAll 是正常截斷；其他錯誤屬環境問題。
 		return Result{Content: "search_code 失敗：" + walkErr.Error(), IsError: true}
-	}
-	if secretBlocked {
-		return Result{Content: "policy_denied: search_code result hit a secret pattern; human confirmation required", IsError: true}
 	}
 	out, merr := json.Marshal(hits)
 	if merr != nil {
@@ -339,14 +340,21 @@ func (t *ToolRegistry) semgrep(ctx context.Context, input json.RawMessage) Resul
 	if len(hits) > MaxSemgrepHits {
 		hits = hits[:MaxSemgrepHits]
 	}
+	for i := range hits {
+		hits[i].MatchedText, _ = redaction.Mask(hits[i].MatchedText)
+		if redaction.HasSecret(hits[i].MatchedText) {
+			return Result{Content: "policy_denied: semgrep 遮蔽後仍命中 secret pattern（fail-closed）", IsError: true}
+		}
+	}
 	b, mErr := json.Marshal(hits)
 	if mErr != nil {
 		return Result{Content: "semgrep 序列化失敗：" + mErr.Error(), IsError: true}
 	}
-	if redaction.HasSecret(string(b)) {
-		return Result{Content: "policy_denied: semgrep 輸出命中 secret pattern，已停止（請先人工確認）", IsError: true}
+	masked, _ := redaction.Mask(string(b))
+	if redaction.HasSecret(masked) {
+		return Result{Content: "policy_denied: semgrep 遮蔽後仍命中 secret pattern（fail-closed）", IsError: true}
 	}
-	return Result{Content: string(b)}
+	return Result{Content: masked}
 }
 
 // semgrepHit 是 §18.1 固定回傳格式。

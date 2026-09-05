@@ -233,6 +233,7 @@ func TestPatternsRegexLiteralMatches(t *testing.T) {
 	}
 	var _ *regexp.Regexp = re
 }
+
 // TestMaskSpanRedaction（ADR 0006）：樣式命中以 span 遮蔽後保留其餘內容——
 // 誤報（sqlite 錯誤訊息撞 kv_secret）不得連同 nonce 一起吃掉 oracle 證據。
 func TestMaskSpanRedaction(t *testing.T) {
@@ -275,5 +276,23 @@ func TestMaskNoHit(t *testing.T) {
 	masked, names := Mask(text)
 	if masked != text || len(names) != 0 {
 		t.Errorf("Mask 無命中應無操作：masked=%q names=%v", masked, names)
+	}
+}
+
+// TestMaskPrefixSecretsCoversFullValue：前綴偵測器必須遮掉完整 token，不能只蓋
+// sk-ant-/ghp_/xoxb- 後把真正憑證尾端留在工具輸出。
+func TestMaskPrefixSecretsCoversFullValue(t *testing.T) {
+	for _, secret := range []string{
+		"sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890",
+		"ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+		"xoxb-123456789012-abcdefABCDEF",
+	} {
+		masked, names := Mask("before " + secret + " after")
+		if len(names) == 0 || !strings.Contains(masked, "***REDACTED***") {
+			t.Errorf("應命中並遮蔽 %q：masked=%q names=%v", secret, masked, names)
+		}
+		if strings.Contains(masked, secret) || HasSecret(masked) {
+			t.Errorf("遮蔽後仍殘留 secret %q：%q", secret, masked)
+		}
 	}
 }

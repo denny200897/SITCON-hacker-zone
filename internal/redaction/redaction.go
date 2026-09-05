@@ -51,7 +51,7 @@ func Redact(text string, secrets []string) string {
 // （含 private_key 的跨行段）一律以 "***REDACTED***" 蓋掉，回傳遮蔽後文字與
 // 命中樣式名稱清單（去重、與清單順序一致）。無命中回傳原文與空 slice。
 //
-// 語意（ADR 0006）：供 trusted artifact 落盤使用——樣式命中可能是誤報（如
+// 語意（ADR 0006）：供 trusted artifact 落盤及受限的模型工具輸出使用——樣式命中可能是誤報（如
 // sqlite 錯誤訊息「unrecognized token: <nonce>」必撞 kv_secret），整段拒收會
 // 讓 oracle 證據連同 nonce 一起消失；遮蔽保留其餘內容供 oracle 判讀，命中
 // 樣式名由呼叫端記入 evidence（artifact_redactions），不作靜默處理。

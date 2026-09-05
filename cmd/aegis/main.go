@@ -76,7 +76,7 @@ func newReview() *cobra.Command {
 	c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制審查子樹")
 	c.Flags().StringVar(&runDir, "run-dir", "", "指定新 run 目錄")
 	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
-	c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 回覆、公開摘要與工具活動")
+	c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 工作流程、回覆摘要與工具活動")
 	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
@@ -95,6 +95,7 @@ func newReview() *cobra.Command {
 		if runDir == "" {
 			runDir = filepath.Join(scanRoot, "out", "run-"+time.Now().UTC().Format("20060102-150405.000000000"))
 		}
+		fmt.Fprintf(cmd.OutOrStdout(), "\n◆ Review workflow started\n  target: %s\n  run: %s\n", scanRoot, runDir)
 
 		run := func(stageArgs ...string) error {
 			root := newRoot()
@@ -111,9 +112,11 @@ func newReview() *cobra.Command {
 		if watch {
 			scanArgs = append(scanArgs, "--watch")
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), "\n[1/4] SCAN — snapshot, inventory, detectors, and AI review")
 		if err := run(scanArgs...); err != nil {
 			return err
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), "✓ [1/4] SCAN complete")
 
 		data, err := os.ReadFile(filepath.Join(runDir, "findings.json"))
 		if err != nil {
@@ -131,6 +134,7 @@ func newReview() *cobra.Command {
 		}
 		var verificationErr error
 		if supportedCount > 0 {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n[2/4] PROVE — validating %d supported finding(s)\n", supportedCount)
 			proveArgs := []string{"prove", "--target", target, "--run-dir", runDir, "--pack", packDir}
 			if targetSubdir != "" {
 				proveArgs = append(proveArgs, "--target-subdir", targetSubdir)
@@ -143,16 +147,27 @@ func newReview() *cobra.Command {
 			}
 			if err := run(proveArgs...); err != nil {
 				verificationErr = err
-			} else if _, err := os.Stat(filepath.Join(runDir, "evidence")); err == nil {
-				if err := run("replay", "--target", scanRoot, "--run-dir", runDir, "--pack", packDir); err != nil {
-					verificationErr = err
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "✓ [2/4] PROVE complete")
+				if _, err := os.Stat(filepath.Join(runDir, "evidence")); err == nil {
+					fmt.Fprintln(cmd.OutOrStdout(), "\n[3/4] REPLAY — independently checking evidence")
+					if err := run("replay", "--target", scanRoot, "--run-dir", runDir, "--pack", packDir); err != nil {
+						verificationErr = err
+					} else {
+						fmt.Fprintln(cmd.OutOrStdout(), "✓ [3/4] REPLAY complete")
+					}
+				} else {
+					fmt.Fprintln(cmd.OutOrStdout(), "○ [3/4] REPLAY skipped — no evidence bundle")
 				}
 			}
 		} else if len(findings) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "沒有候選 finding；略過 prove/replay（這只代表已載入 pack 的覆蓋範圍內未命中）")
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [2/4] PROVE skipped — no candidate findings")
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [3/4] REPLAY skipped — no evidence bundle")
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "找到 %d 個 finding，但目前 pack 尚無對應 proof；保留於報告並略過 prove/replay\n", len(findings))
+			fmt.Fprintf(cmd.OutOrStdout(), "○ [2/4] PROVE skipped — %d finding(s), but no matching proof runtime\n", len(findings))
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [3/4] REPLAY skipped — no evidence bundle")
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), "\n[4/4] REPORT — generating final security report")
 		reportArgs := []string{"report", "--target", scanRoot, "--run-dir", runDir}
 		if watch {
 			reportArgs = append(reportArgs, "--watch")
@@ -160,11 +175,12 @@ func newReview() *cobra.Command {
 		if err := run(reportArgs...); err != nil {
 			return err
 		}
+		fmt.Fprintln(cmd.OutOrStdout(), "✓ [4/4] REPORT complete")
 		if verificationErr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "review 已產生失敗狀態報告：%s\n", runDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "\n✗ REVIEW INCOMPLETE — report generated, but verification failed\n  artifacts: %s\n", runDir)
 			return verificationErr
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "review 完成：%s\n", runDir)
+		fmt.Fprintf(cmd.OutOrStdout(), "\n✓ REVIEW COMPLETE\n  artifacts: %s\n", runDir)
 		return nil
 	}
 	return c
@@ -294,7 +310,7 @@ func newStage(name, short string) *cobra.Command {
 		c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
 	}
 	if name == "scan" || name == "prove" || name == "report" {
-		c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 回覆、階段與工具活動")
+		c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 工作流程、回覆摘要與工具活動")
 	}
 	if name == "prove" {
 		c.Flags().StringVar(&specPath, "spec", "", "WitnessSpec JSON")
@@ -320,6 +336,9 @@ func newStage(name, short string) *cobra.Command {
 			if targetSubdir != "" {
 				root = filepath.Join(root, targetSubdir)
 			}
+			if watch {
+				fmt.Fprintf(cmd.OutOrStdout(), "◆ SCAN STARTED — %s\n▶ Creating immutable snapshot…\n", root)
+			}
 			// Snapshot is the first repository read. All later scan stages consume
 			// the immutable copy so provenance cannot drift under worktree edits.
 			cacheDir, err := snapshotCacheDir()
@@ -330,11 +349,17 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
+			if watch {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ Snapshot ready — %s\n▶ Building repository inventory…\n", snap.ID)
+			}
 			inv, err := inventory.Build(snap.Dir)
 			if err != nil {
 				return stageError(name, err)
 			}
 			inv.SnapshotID = snap.ID
+			if watch {
+				fmt.Fprintf(cmd.OutOrStdout(), "✓ Inventory ready — %d files, %d entrypoints\n", len(inv.Files), len(inv.Entrypoints))
+			}
 			packDir, err = resolvePackDir(packDir, cacheDir)
 			if err != nil {
 				return stageError(name, err)
@@ -393,6 +418,9 @@ func newStage(name, short string) *cobra.Command {
 			}
 			var detectorResults [][]candidates.Candidate
 			if len(pack.Manifest.Detectors) > 0 {
+				if watch {
+					fmt.Fprintf(cmd.OutOrStdout(), "▶ Running %d deterministic detector(s)…\n", len(pack.Manifest.Detectors))
+				}
 				if _, err := exec.LookPath("semgrep"); err != nil {
 					if !reviewerConfigured {
 						return stageError(name, fmt.Errorf("找不到 semgrep，且未設定 reviewer 可接手：%w", err))
@@ -423,7 +451,10 @@ func newStage(name, short string) *cobra.Command {
 				return stageError(name, err)
 			}
 			if reviewerConfigured {
-				llmCandidates, reviewErr := runLLMScan(scanCtx, root, snap.Dir, inv, pack)
+				if watch {
+					fmt.Fprintln(cmd.OutOrStdout(), "▶ Starting global AI code review…")
+				}
+				llmCandidates, reviewErr := runLLMScan(scanCtx, root, snap.Dir, runDir, packDir, inv, pack)
 				if reviewErr != nil {
 					return stageError(name, reviewErr)
 				}
@@ -1328,5 +1359,5 @@ func latestRunDir(root string) string {
 }
 
 func stageError(stage string, err error) error {
-	return fmt.Errorf("已完成的 stage：%s\njournal 位置：%s\n下一步建議：%s\n原因：%s", stage, "（本次尚未建立）", "檢查設定後重試", err)
+	return fmt.Errorf("✗ STAGE FAILED：%s\njournal 位置：%s\n下一步建議：%s\n原因：%s", stage, "（本次尚未建立或由上方 workflow 顯示）", "修正原因後重試；成功時會明確顯示 ✓ COMPLETE", err)
 }

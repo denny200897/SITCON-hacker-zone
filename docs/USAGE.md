@@ -76,19 +76,26 @@ LLM reviewer 採兩階段全局審查：先分批讀取跨語言原始碼與設�
 核對的 `file:line` evidence，否則不收錄。Semgrep 是獨立補充來源，不是 LLM 的
 搜尋空間上限。
 
+Reviewer 本身以唯讀 agent tool loop 運作：先取得 inventory 與分批檔名，再自行呼叫
+`read_code`、`search_code`、`semgrep` 探索實際程式碼。每組工具呼叫前，模型被要求
+輸出一段可公開的 investigation commentary；TUI 以 `💭` 顯示 commentary，並以
+`→`／`←` 顯示真實工具參數與結果摘要。這些是供應商實際回傳的公開說明，不是偽造
+或揭露供應商未提供的隱藏 chain-of-thought。
+
 inventory 目前辨識 Python、Go、JavaScript/TypeScript、Java/Kotlin、PHP、Ruby、
 C#、Rust、Scala、Vue、Svelte，以及常見 markup、設定檔、shell 與 Dockerfile。
 未列入辨識表、但具有非資料型副檔名且內容是 UTF-8 文字的檔案，也會以未知語言
 原始碼送交 reviewer；`.txt/.csv/.log/.lock/.map` 等資料或產物預設不送出。
 
-加入 `--watch` 可在終端看到各 AI 階段、實際模型回覆、公開的
-`analysis_summary`、prover 工具呼叫與工具結果：
+加入 `--watch` 可在終端看到 review plan、批次進度、公開的
+`analysis_summary`、candidate 數量、prover 工具活動與明確完成／失敗狀態：
 
 ```sh
 ./bin/aegis review --target /path/to/repo --watch
 ```
 
-完整可稽核事件會寫入 run 目錄的 `ai-events.jsonl`；政策閘決策與工具參數仍寫在
+終端不會傾印 source bundle、完整 prompt、完整 JSON 或 `read_code` 結果；這些完整
+可稽核事件只寫入 run 目錄的 `ai-events.jsonl`。政策閘決策與工具參數仍寫在
 `audit.jsonl`。兩者皆為權限 `0600`。供應商未回傳、或屬於模型內部的隱藏
 chain-of-thought 不會也不能被偽造展示；介面顯示的是模型實際可見輸出與證據摘要。
 

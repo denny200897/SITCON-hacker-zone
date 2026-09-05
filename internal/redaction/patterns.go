@@ -21,17 +21,17 @@ var patterns = []pattern{
 	{"aws_key", regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},
 	// Anthropic API key 前綴。前綴本身即足以判定，不要求後綴長度；
 	// 完整金鑰（sk-ant- 加 20+ 字元）同時命中 sk-{20,}，見 Scan 的去重。
-	{"anthropic_key", regexp.MustCompile(`sk-ant-`)},
+	{"anthropic_key", regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]*`)},
 	// 泛用 sk- 風格金鑰（OpenAI、DeepSeek、自架端點等）：前綴後接 20+ 英數。
 	{"generic_sk", regexp.MustCompile(`sk-[A-Za-z0-9]{20,}`)},
 	// GitHub PAT（classic ghp_ 與 OAuth gho_）。
-	{"github_token", regexp.MustCompile(`ghp_|gho_`)},
+	{"github_token", regexp.MustCompile(`(?:ghp|gho)_[A-Za-z0-9]*`)},
 	// PEM 私鑰。BEGIN 與 PRIVATE KEY 間可為 RSA/EC/OPENSSH/ENCRYPTED 等標記；
 	// 檔尾可能跨行，以 (?s) 讓 . 吃進換行。END 段設為可選——被截斷的私鑰
 	// （只有檔頭與 base64、缺 -----END）同樣是洩漏，偵測閘寧可誤報也不漏報。
 	{"private_key", regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----(.*?-----END [A-Z ]*PRIVATE KEY-----)?`)},
 	// Slack token（xoxb/xoxa/xoxp/xoxr/xoxs 開頭）。
-	{"slack_token", regexp.MustCompile(`xox[baprs]-`)},
+	{"slack_token", regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]*`)},
 	// 通用賦值洩漏：api_key/secret/password/token 後接 = 或 : 再接 8+ 非空白字元。
 	{"kv_secret", regexp.MustCompile(`(?i)(api_?key|secret|password|token)\s*[=:]\s*\S{8,}`)},
 }

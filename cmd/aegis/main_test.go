@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aegis-dev/aegis/internal/agent"
 	"github.com/aegis-dev/aegis/internal/inventory"
 	"github.com/aegis-dev/aegis/internal/llm"
 	"github.com/aegis-dev/aegis/internal/packs"
@@ -103,6 +104,22 @@ func (f fixedRoleAdapter) Chat(context.Context, llm.ChatRequest) (llm.Response, 
 	return f.response, nil
 }
 func (fixedRoleAdapter) Provider() string { return "test" }
+
+type sequenceRoleAdapter struct {
+	responses []llm.Response
+	next      int
+}
+
+func (s *sequenceRoleAdapter) Chat(context.Context, llm.ChatRequest) (llm.Response, error) {
+	if s.next >= len(s.responses) {
+		return llm.Response{}, fmt.Errorf("unexpected extra model turn")
+	}
+	response := s.responses[s.next]
+	s.next++
+	return response, nil
+}
+
+func (*sequenceRoleAdapter) Provider() string { return "test" }
 
 func TestRoleTextRejectsRefusal(t *testing.T) {
 	_, err := roleText(context.Background(), fixedRoleAdapter{response: llm.Response{StopReason: llm.StopRefusal, RefusalCategory: "cyber"}}, llm.RoleReviewer, "configured", "system", "prompt", "high")
@@ -229,23 +246,87 @@ func TestAITracePersistsAndWatchesVisibleEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := withAITrace(context.Background(), trace, "review-batch-1")
+	emitAITrace(ctx, "reviewer", "request", "provider=test model=test effort=high\nfunc vulnerable() { rawSource() }")
 	emitAITrace(ctx, "reviewer", "response", `{"analysis_summary":"checked auth flow"}`)
+	emitAITrace(ctx, "reviewer", "tool_result", "read_code func vulnerable() { rawSource() }")
 	if err := trace.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(terminal.String(), "review-batch-1") || !strings.Contains(terminal.String(), "checked auth flow") {
 		t.Fatalf("terminal trace = %s", terminal.String())
 	}
+	if strings.Contains(terminal.String(), "func vulnerable") || !strings.Contains(terminal.String(), "request sent") || !strings.Contains(terminal.String(), "result received") {
+		t.Fatalf("terminal must summarize rather than dump source:\n%s", terminal.String())
+	}
 	data, err := os.ReadFile(filepath.Join(dir, "ai-events.jsonl"))
-	if err != nil || !strings.Contains(string(data), `"kind":"response"`) {
+	if err != nil || !strings.Contains(string(data), `"kind":"response"`) || !strings.Contains(string(data), "func vulnerable") {
 		t.Fatalf("persisted trace = %s err=%v", data, err)
+	}
+}
+
+func TestFormatWatchEventSummarizesCandidateArray(t *testing.T) {
+	event := aiTraceEvent{Role: "reviewer", Phase: "review-batch-2", Kind: "response",
+		Content: `[{"file":"secret.go","line":9,"rationale":"raw model output"}]`}
+	got := formatWatchEvent(event)
+	if !strings.Contains(got, "1 candidate(s)") || strings.Contains(got, "secret.go") || strings.Contains(got, "raw model output") {
+		t.Fatalf("candidate response was not summarized: %s", got)
+	}
+}
+
+func TestReviewerAgentSessionShowsCommentaryAndToolCallsWithoutSourceDump(t *testing.T) {
+	snapshot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(snapshot, "main.go"), []byte("package main\nfunc login() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runDir := t.TempDir()
+	audit, err := agent.OpenAuditLog(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer audit.Close()
+	registry := &agent.ToolRegistry{SnapshotDir: snapshot}
+	registry.SetAudit(audit)
+	adapter := &sequenceRoleAdapter{responses: []llm.Response{
+		{StopReason: llm.StopToolUse, Content: []llm.ContentBlock{
+			{Type: "text", Text: "I will inspect the login handler and its callers."},
+			{Type: "tool_use", ToolUse: &llm.ToolUse{ID: "tool-1", Name: "read_code", Input: []byte(`{"path":"main.go","start":1,"end":2}`)}},
+		}},
+		{StopReason: llm.StopEndTurn, Content: []llm.ContentBlock{{Type: "text", Text: `{"analysis_summary":"No exploitable path found.","candidates":[]}`}}},
+	}}
+	var terminal bytes.Buffer
+	trace, err := openAITrace(runDir, &terminal, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trace.Close()
+	result, calls, err := reviewerAgentSession(withAITrace(context.Background(), trace, "review-batch-1"), adapter, "test-model", registry, nil, "Inspect main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || !strings.Contains(result, "No exploitable path") {
+		t.Fatalf("calls=%d result=%s", calls, result)
+	}
+	visible := terminal.String()
+	for _, want := range []string{"💭", "read_code", "main.go lines 1-2", "result received", "0 candidate(s)"} {
+		if !strings.Contains(visible, want) {
+			t.Fatalf("visible trace missing %q:\n%s", want, visible)
+		}
+	}
+	if strings.Contains(visible, "package main") || strings.Contains(visible, "func login") {
+		t.Fatalf("tool result source leaked into terminal:\n%s", visible)
 	}
 }
 
 func TestLLMScanAcceptsGlobalFindingOutsidePackTaxonomy(t *testing.T) {
 	reply := `[{"file":"main.go","line":2,"symbol":"login","type":"race_condition","suspected_vuln_class":"concurrent login limit bypass","cwe":"CWE-362","impact":"high","evidence":["main.go:2"],"chain":["HTTP login","non-atomic counter","limit bypass"],"rationale":"counter update is not atomic","priority_hint":"high"}]`
+	requestCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		requestCount++
+		if requestCount == 1 {
+			fmt.Fprint(w, `{"model":"test","choices":[{"message":{"role":"assistant","content":"I will inspect the login implementation.","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_code","arguments":"{\"path\":\"main.go\",\"start\":1,\"end\":3}"}}]},"finish_reason":"tool_calls"}]}`)
+			return
+		}
 		fmt.Fprintf(w, `{"model":"test","choices":[{"message":{"role":"assistant","content":%q},"finish_reason":"stop"}]}`, reply)
 	}))
 	defer srv.Close()
@@ -270,12 +351,15 @@ func TestLLMScanAcceptsGlobalFindingOutsidePackTaxonomy(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &packs.Pack{Manifest: &packs.Manifest{PackID: "python-web", SinkTypes: []packs.SinkTypeEntry{{Type: "sql.concat"}}}}
-	got, err := runLLMScan(context.Background(), t.TempDir(), snapshot, inv, p)
+	got, err := runLLMScan(context.Background(), t.TempDir(), snapshot, t.TempDir(), t.TempDir(), inv, p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Sink.Type != "race_condition" || got[0].CWE != "CWE-362" || len(got[0].Chain) != 3 {
 		t.Fatalf("generic finding was filtered or damaged: %+v", got)
+	}
+	if requestCount < 3 { // tool request, post-tool final, then global synthesis
+		t.Fatalf("reviewer did not execute the expected tool loop; requests=%d", requestCount)
 	}
 }
 

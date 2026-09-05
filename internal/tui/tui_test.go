@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/aegis-dev/aegis/internal/settings"
 )
@@ -29,6 +30,36 @@ func TestCompleteFillsUniqueCommandAndSharedPrefix(t *testing.T) {
 	}
 }
 
+func TestViewStaysInsideNarrowTerminal(t *testing.T) {
+	m := &model{w: 56, h: 24, lang: languageEnglish, menu: &menuNode{}}
+	m.ti = textinput.New()
+	m.menu = rootMenu(m)
+	m.layout()
+	view := m.View()
+	if got := lipgloss.Width(view); got > m.w {
+		t.Fatalf("view width = %d, exceeds terminal width %d", got, m.w)
+	}
+	if got := lipgloss.Height(view); got > m.h {
+		t.Fatalf("view height = %d, exceeds terminal height %d", got, m.h)
+	}
+}
+
+func TestChineseLanguageLocalizesMenusAndWizard(t *testing.T) {
+	m := &model{w: 100, h: 40, lang: languageChinese, menu: rootMenu(nil)}
+	m.ti = textinput.New()
+	if got := m.menuView(); !strings.Contains(got, "檢視儲存庫") || strings.Contains(got, "Review a repository") {
+		t.Fatalf("root menu was not localized: %s", got)
+	}
+	m.menu = providersMenu()
+	if got := m.menuView(); !strings.Contains(got, "新增供應商") || strings.Contains(got, "Add a provider") {
+		t.Fatalf("provider menu was not localized: %s", got)
+	}
+	reviewWizard(m)
+	if got := m.wizardView(); !strings.Contains(got, "檢視儲存庫") || !strings.Contains(got, "儲存庫路徑") {
+		t.Fatalf("wizard was not localized: %s", got)
+	}
+}
+
 func TestClearScreenWipesTranscriptAndHeaderShowsBanner(t *testing.T) {
 	m := &model{lang: languageEnglish}
 	m.transcript.WriteString("some earlier review output that should be wiped\n")
@@ -48,6 +79,25 @@ func TestCompleteIgnoresInputWithArguments(t *testing.T) {
 	m.complete()
 	if got := m.ti.Value(); got != "/model set" {
 		t.Errorf("complete left argument input as %q, want unchanged", got)
+	}
+}
+
+func TestMainCommandOpensGuidedUI(t *testing.T) {
+	m := &model{lang: languageEnglish, ti: textinput.New()}
+
+	if handled, _ := m.handleMainCommand("providers"); !handled {
+		t.Fatal("providers was not recognized as a main command")
+	}
+	if m.menu == nil || m.menu.parent == nil {
+		t.Fatal("providers did not open its submenu")
+	}
+
+	m.menu = nil
+	if handled, _ := m.handleMainCommand("review"); !handled {
+		t.Fatal("review was not recognized as a main command")
+	}
+	if m.wizard == nil {
+		t.Fatal("review did not open its guided wizard")
 	}
 }
 

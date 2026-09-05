@@ -20,9 +20,9 @@ import (
 // dispatcher. English is the default; /lang en|zh changes and persists it.
 func Run(deps console.Deps) error {
 	m := newModel(deps)
-	// Keep terminal-native drag selection and Cmd+C available. Keyboard scrolling
-	// still controls the viewport, so mouse tracking is unnecessary here.
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	// Enable wheel events so the output viewport can be browsed without leaving
+	// the full-screen interface. Keyboard scrolling remains available too.
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
@@ -85,7 +85,9 @@ func newModel(deps console.Deps) *model {
 	ti.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(brandTo.Hex()))
 	m.ti = ti
 	m.applyLanguage()
-	m.menu = rootMenu(m)
+	// Start in command mode. The root action menu opens after a main command;
+	// submenus and guided choices then use ↑↓ + Enter.
+	m.menu = nil
 	// The banner is chrome, not conversation: it is rendered by syncViewport,
 	// so it stays out of the transcript that /copy captures.
 	return m
@@ -105,6 +107,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.layout()
+	case tea.MouseMsg:
+		var command tea.Cmd
+		m.vp, command = m.vp.Update(msg)
+		commands = append(commands, command)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" || msg.String() == "ctrl+d" {
 			m.exiting = true
@@ -127,11 +133,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+y":
 				return m, m.copyTranscript()
 			case "up":
-				m.menuMove(-1)
-				return m, nil
+				if m.menu != nil {
+					m.menuMove(-1)
+					return m, nil
+				}
 			case "down":
-				m.menuMove(1)
-				return m, nil
+				if m.menu != nil {
+					m.menuMove(1)
+					return m, nil
+				}
 			case "esc":
 				m.goBack()
 				return m, nil
@@ -220,11 +230,51 @@ func (m *model) submit() tea.Cmd {
 	if m.handleLanguageCommand(trimmed) {
 		return nil
 	}
+	if m.menu == nil {
+		if handled, command := m.handleMainCommand(trimmed); handled {
+			return command
+		}
+	}
 	// Interactive reviews expose the public AI response and tool-event stream by
 	// default. The plain CLI remains opt-in through --watch.
 	trimmed = addWatchFlag(trimmed)
 	go func() { _, _ = io.WriteString(m.pipeW, trimmed+"\n") }()
 	return nil
+}
+
+// handleMainCommand enters the guided UI for an exact top-level command.
+// Commands with arguments continue through the console dispatcher so the
+// traditional CLI remains available.
+func (m *model) handleMainCommand(line string) (bool, tea.Cmd) {
+	fields := strings.Fields(line)
+	if len(fields) != 1 {
+		return false, nil
+	}
+	command := strings.TrimPrefix(strings.ToLower(fields[0]), "/")
+	root := rootMenu(m)
+	for i := range root.items {
+		if rootCommandName(i, command) {
+			m.menu = root
+			m.menu.cursor = i
+			return true, m.activateMenu()
+		}
+	}
+	return false, nil
+}
+
+func rootCommandName(index int, command string) bool {
+	aliases := [...]map[string]bool{
+		{"review": true},
+		{"scan": true},
+		{"provider": true, "providers": true},
+		{"model": true, "models": true},
+		{"status": true},
+		{"doctor": true},
+		{"lang": true, "language": true},
+		{"clear": true},
+		{"quit": true, "exit": true},
+	}
+	return aliases[index][command]
 }
 
 // complete performs Tab-completion on the slash command being typed: with one
@@ -278,6 +328,7 @@ func longestCommonPrefix(values []string) string {
 // logs and any run artifacts on disk are untouched.
 func (m *model) clearScreen() {
 	m.transcript.Reset()
+	m.menu = nil
 	m.syncViewport()
 }
 
@@ -369,14 +420,42 @@ func (m *model) syncViewport() {
 	if !m.ready {
 		return
 	}
+	wasAtBottom := m.vp.AtBottom()
 	m.vp.SetContent(m.header() + "\n\n" + m.wrap(m.transcript.String()))
-	m.vp.GotoBottom()
+	if wasAtBottom {
+		m.vp.GotoBottom()
+	}
 }
 
 // header is the left-aligned banner (logo, tagline, hint) shown at the top of
 // the scrollback.
 func (m *model) header() string {
-	return banner(translations[m.lang])
+	width := 0
+	if m.w > 0 {
+		width = m.contentWidth()
+	}
+	result := banner(translations[m.lang], width)
+	if m.compactLayout() {
+		// Keep the actual ANSI Shadow wordmark in short terminals. Only remove
+		// secondary banner copy; replacing the logo with plain text looks broken.
+		logo := asciiLogo
+		if width > 0 && lipgloss.Width(logo) > width {
+			logo = "AEGIS"
+		}
+		result = gradientBlock(logo, brandFrom, brandTo) + "\n" +
+			gradientText(translations[m.lang].tagline, brandFrom, brandTo)
+	}
+	if width == 0 {
+		return result
+	}
+	// The outer frame is centered, but the original CLI composition is
+	// intentionally left-aligned: logo, menu, and input share the same visual
+	// starting edge.
+	return lipgloss.NewStyle().Width(width).Align(lipgloss.Left).Render(result)
+}
+
+func (m *model) compactLayout() bool {
+	return m.h > 0 && m.h < 30
 }
 
 func (m *model) wrap(value string) string {
@@ -398,9 +477,9 @@ func (m *model) layout() {
 		m.vp = viewport.New(m.contentWidth(), 1)
 		m.ready = true
 	}
-	// Box total = box content Width + 2; inside, border+padding take 4 and the
-	// "› " prompt ~3 more.
-	m.ti.Width = max(m.contentWidth()-7, 1)
+	// Leave room for the input prompt plus the input box border/padding. The
+	// textinput width is the editable content width, not the rendered box width.
+	m.ti.Width = max(m.contentWidth()-10, 1)
 	m.resize()
 }
 
@@ -425,7 +504,14 @@ func (m *model) View() string {
 		return translations[m.lang].starting
 	}
 	inner := m.vp.View() + "\n" + m.controlBlock()
-	return appFrame.Render(inner)
+	frame := appFrame.Width(m.contentWidth()).Render(inner)
+	if m.w > 0 {
+		// Keep the frame itself narrower than the terminal by a small gutter, then
+		// place it centrally. Without PlaceHorizontal, lipgloss leaves all spare
+		// cells on the right, which makes the interface look lopsided.
+		return lipgloss.PlaceHorizontal(m.w, lipgloss.Center, frame)
+	}
+	return frame
 }
 
 func (m *model) hintLine() string {
@@ -470,7 +556,9 @@ var (
 const (
 	frameColor         = "#33474A"
 	appFrameHorizontal = 2 + 4 // border + horizontal padding
-	appFrameVertical   = 2 + 2 // border + vertical padding
+	// lipgloss's rounded border contributes one additional terminal row on
+	// render (corner/edge handling), so reserve the measured five rows.
+	appFrameVertical = 5
 )
 
 type chanWriter struct{ ch chan string }

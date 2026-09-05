@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/lucasb-eyer/go-colorful"
 )
 
@@ -76,8 +77,16 @@ func gradientBlock(block string, from, to colorful.Color) string {
 	return out.String()
 }
 
-func banner(words copyText) string {
-	logo := gradientBlock(asciiLogo, brandFrom, brandTo)
+func banner(words copyText, width int) string {
+	logo := asciiLogo
+	// ANSI Shadow is intentionally wide. On a narrow terminal, showing the
+	// full glyph would make lipgloss grow the frame and the terminal clip it.
+	// Keep the brand visible with a compact fallback until the window is wide
+	// enough to render the complete ANSI Shadow wordmark.
+	if width > 0 && ansi.StringWidth(strings.Split(asciiLogo, "\n")[0]) > width {
+		logo = "AEGIS"
+	}
+	logo = gradientBlock(logo, brandFrom, brandTo)
 	tagline := gradientText(words.tagline, brandFrom, brandTo)
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("#7A8A87")).Render(words.bannerHint)
 	return logo + "\n\n" + tagline + "\n" + hint

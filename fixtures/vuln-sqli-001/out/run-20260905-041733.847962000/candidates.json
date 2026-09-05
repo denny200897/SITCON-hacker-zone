@@ -1,0 +1,20 @@
+[
+  {
+    "id": "C-0001",
+    "sink": {
+      "file": "app.py",
+      "line": 23,
+      "symbol": "app",
+      "type": "sql.concat"
+    },
+    "sources": [
+      {
+        "origin": "semgrep",
+        "rule": "py.sql.string-concat"
+      }
+    ],
+    "suspected_vuln_class": "sqli",
+    "rationale": "SQL 字串拼接：未參數化的字串進 sqlite3/DB API execute——SQLi 候選（aegis finding 回鏈：此規則為 sink detector）",
+    "priority_hint": "high"
+  }
+]

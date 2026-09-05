@@ -180,7 +180,7 @@ func (s *session) dispatch(line string) error {
 			return s.cmdModelList()
 		case "set":
 			if len(args) != 3 {
-				return errors.New("用法：/model set <role> <provider/model-id>")
+				return errors.New("用法：/model set <role|all> <provider/model-id>")
 			}
 			return s.cmdModelSet(args[1], args[2])
 		case "reset":
@@ -252,12 +252,12 @@ func (s *session) promptLine(prompt string) string {
 func (s *session) cmdHelp() {
 	fmt.Fprint(s.out, `可用指令（§3.3）：
   /provider list                              列出供應商與金鑰有無（永不顯示內容）
-  /provider add <name>                        新增供應商（anthropic | openai-compat）
+  /provider add <name>                        新增供應商（anthropic | openai-compat | openrouter 捷徑）
   /provider remove <name>                     移除供應商（連同其金鑰）
   /key set <provider>                         隱藏輸入 API 金鑰並儲存
   /key clear <provider>                       刪除已存金鑰
   /model list                                 檢視角色路由（repo > user，§3.1）
-  /model set <role> <provider/model-id>       覆寫角色路由（寫入使用者層級設定）
+  /model set <role|all> <provider/model-id>   覆寫角色路由（all = 五角色一次設定；寫入使用者層級設定）
   /model reset                                清空使用者層級模型覆寫
   /status                                     供應商、金鑰、路由、Docker 狀態
   /doctor                                     體檢（Docker、映像、供應商連通）

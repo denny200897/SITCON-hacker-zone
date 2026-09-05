@@ -1,0 +1,28 @@
+[
+  {
+    "confidence": 0,
+    "disposition": "OPEN",
+    "id": "F-0001",
+    "missing_links": [
+      "input wiring: app.py:23"
+    ],
+    "mode": "witness",
+    "rationale": "callable sink exists and needs one input adapter at app.py:23",
+    "reachability": "D2",
+    "severity": "high",
+    "sink": {
+      "file": "app.py",
+      "line": 23,
+      "symbol": "app",
+      "type": "sql.concat"
+    },
+    "snapshot_id": "SN-4be545933a09",
+    "sources": [
+      {
+        "origin": "semgrep",
+        "rule": "py.sql.string-concat"
+      }
+    ],
+    "verification": "NOT_RUN"
+  }
+]

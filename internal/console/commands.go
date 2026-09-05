@@ -81,8 +81,15 @@ func sortedNames[V any](m map[string]V) []string {
 	return names
 }
 
-// cmdProviderAdd 互動新增供應商（§3.3）：追問 type（anthropic | openai-compat，
-// 閉集 §3.2）；openai-compat 再追問 base_url（留空 = 不設定）。寫入使用者層級
+// openRouterBaseURL 是 /provider add 的 openrouter 捷徑預設端點（§3.3）。
+// 僅為互動預設值；落盤的 type 恆為 openai-compat（§3.2 轉接器閉集不變）。
+const openRouterBaseURL = "https://openrouter.ai/api/v1"
+
+// cmdProviderAdd 互動新增供應商（§3.3）：追問 type（anthropic | openai-compat |
+// openrouter 捷徑）。前兩者為 §3.2 轉接器閉集；openrouter 為便捷預設——仍以
+// openai-compat 轉接器寫入，base_url 直接 Enter 即採 openRouterBaseURL（§3.2
+// 已明列 OpenRouter 為 openai-compat 涵蓋範圍，此處只是免背端點的快捷輸入）。
+// openai-compat 再追問 base_url（留空 = 不設定）。寫入使用者層級
 // settings.toml（§3.3：供應商定義無內建，全在使用者層管理）。
 //
 // ASK（§23-9）：兩個互動細節 spec 未規定——
@@ -105,17 +112,24 @@ func (s *session) cmdProviderAdd(name string) error {
 		return fmt.Errorf("名稱 %q 已被 repo aegis.toml 使用；使用者層不得同名遮蔽，請改名或改 aegis.toml", name)
 	}
 
-	pt := credentials.ProviderType(s.promptLine("供應商類型（anthropic | openai-compat）: "))
-	switch pt {
-	case credentials.ProviderTypeAnthropic, credentials.ProviderTypeOpenAICompat:
-		// 合法（§3.2 閉集）。
-	default:
-		return fmt.Errorf("供應商類型 %q 不合法（僅 accept anthropic | openai-compat，§3.2）；已取消新增", string(pt))
-	}
-
+	pt := credentials.ProviderType(s.promptLine("供應商類型（anthropic | openai-compat | openrouter）: "))
 	baseURL := ""
-	if pt == credentials.ProviderTypeOpenAICompat {
+	switch pt {
+	case credentials.ProviderTypeAnthropic:
+		// 合法（§3.2 閉集）；走官方端點，不問 base_url。
+	case credentials.ProviderTypeOpenAICompat:
 		baseURL = s.promptLine("base_url（留空則不設定）: ")
+	case "openrouter":
+		// 便捷預設（§3.3）：OpenRouter 是 openai-compat 端點，落盤 type 恆為
+		// openai-compat，避免 §3.2 轉接器閉集長出第三個成員。留空 = 官方端點；
+		// 也可貼上自訂端點（代理／鏡像）。
+		pt = credentials.ProviderTypeOpenAICompat
+		baseURL = s.promptLine("base_url（直接 Enter = " + openRouterBaseURL + "）: ")
+		if baseURL == "" {
+			baseURL = openRouterBaseURL
+		}
+	default:
+		return fmt.Errorf("供應商類型 %q 不合法（僅 accept anthropic | openai-compat | openrouter，§3.2）；已取消新增", string(pt))
 	}
 
 	user.Providers[name] = settings.Provider{Type: string(pt), BaseURL: baseURL}
@@ -268,19 +282,32 @@ func (s *session) renderModels(repo, user *settings.Config) {
 	w.Flush()
 }
 
+// modelSetAll 是 /model set 的萬用字元：role 給 "all" 時，同一個引用一次寫入
+// §3.1 全部五個角色（§3.3）。不是一個 role——只作為指令輸入的選項，不得進入
+// 設定檔的 [models] 鍵。
+const modelSetAll = "all"
+
 // cmdModelSet 覆寫角色路由（§3.3：寫入使用者層級設定）。驗證序：
-// role 閉集（§3.1 五角色）→ settings.ValidateRef（§3.1 引用語法）→
-// 供應商必須存在於 repo 或 user 任一層。
+// role 閉集（§3.1 五角色；或 "all" 一次設定全部五角色）→ settings.ValidateRef
+//（§3.1 引用語法）→ 供應商必須存在於 repo 或 user 任一層。
+// "all" 僅展開成五個角色鍵寫入，同一引用對每個角色皆相同——成本分層（§3.1：
+// 機械性工作用便宜模型、證明用最強模型）的使用者之後仍可逐一覆寫單一角色。
 func (s *session) cmdModelSet(role, ref string) error {
-	validRole := false
-	for _, r := range roles {
-		if r == role {
-			validRole = true
-			break
+	targets := []string{role}
+	if role != modelSetAll {
+		validRole := false
+		for _, r := range roles {
+			if r == role {
+				validRole = true
+				break
+			}
 		}
-	}
-	if !validRole {
-		return fmt.Errorf("未知的角色 %q（可用：recon, reviewer, triager, prover, reporter，§3.1）", role)
+		if !validRole {
+			return fmt.Errorf("未知的角色 %q（可用：recon, reviewer, triager, prover, reporter，或 all 一次設定全部，§3.1）", role)
+		}
+	} else {
+		// 展開萬用字元為 §3.1 角色閉集（固定順序，輸出與寫入皆確定）。
+		targets = append([]string(nil), roles...)
 	}
 	if err := settings.ValidateRef(ref); err != nil {
 		return err
@@ -293,11 +320,17 @@ func (s *session) cmdModelSet(role, ref string) error {
 	if _, ok := lookupProvider(repo, user, prov); !ok {
 		return fmt.Errorf("引用的供應商 %q 不存在（repo 或使用者設定皆無）；先以 /provider add 新增", prov)
 	}
-	user.Models[role] = ref
+	for _, target := range targets {
+		user.Models[target] = ref
+	}
 	if err := s.writeUserChecked(repo, user); err != nil {
 		return err
 	}
-	fmt.Fprintf(s.out, "已將角色 %q 路由設為 %s（使用者層級覆寫；/model reset 可還原）。\n", role, ref)
+	if role == modelSetAll {
+		fmt.Fprintf(s.out, "已將全部 %d 個角色（%s）路由設為 %s（使用者層級覆寫；/model reset 可還原）。\n", len(targets), strings.Join(targets, ", "), ref)
+	} else {
+		fmt.Fprintf(s.out, "已將角色 %q 路由設為 %s（使用者層級覆寫；/model reset 可還原）。\n", role, ref)
+	}
 	return nil
 }
 

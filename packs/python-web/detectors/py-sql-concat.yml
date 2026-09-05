@@ -1,6 +1,6 @@
 # packs/python-web detectors：高精度 semgrep 規則集（候選來源一；SPEC §4 Stage 1）
 rules:
-  - id: py/sql/string-concat
+  - id: py.sql.string-concat
     message: "SQL 字串拼接：未參數化的字串進 sqlite3/DB API execute——SQLi 候選（aegis finding 回鏈：此規則為 sink detector）"
     severity: ERROR
     languages: [python]
@@ -13,7 +13,7 @@ rules:
       aegis_family: sqli
       aegis_sink_type: sql.concat
 
-  - id: py/cmd/shell-true
+  - id: py.cmd.shell-true
     message: subprocess 以 shell=True 且參數非字面常數——CMDi 候選
     severity: ERROR
     languages: [python]
@@ -23,7 +23,7 @@ rules:
       aegis_family: cmdi
       aegis_sink_type: cmd.shell
 
-  - id: py/deserialize/yaml-unsafe-load
+  - id: py.deserialize.yaml-unsafe-load
     message: yaml.load 未指定 SafeLoader——反序列化候選
     severity: ERROR
     languages: [python]
@@ -33,7 +33,7 @@ rules:
       aegis_family: deserialization
       aegis_sink_type: deserialization.yaml
 
-  - id: py/ssrf/requests-user-url
+  - id: py.ssrf.requests-user-url
     message: requests 對非常數 URL 的請求——SSRF 候選（第二波）
     severity: WARNING
     languages: [python]
@@ -41,7 +41,8 @@ rules:
       - pattern: requests.get($URL, ...)
       - metavariable-pattern:
           metavariable: $URL
-          pattern-not: '"..."'
+          patterns:
+            - pattern-not: '"..."'
     metadata:
       aegis_family: ssrf
       aegis_sink_type: ssrf.url

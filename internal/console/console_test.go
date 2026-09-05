@@ -211,6 +211,75 @@ func TestModelSetValidations(t *testing.T) {
 	}
 }
 
+// TestProviderAddOpenRouterPreset 驗證 openrouter 捷徑（§3.3）：落盤 type 恆為
+// openai-compat（§3.2 轉接器閉集不長第三個成員）；base_url 直接 Enter 採官方
+// 端點預設，輸入自訂值則覆蓋（代理／鏡像情境）。
+func TestProviderAddOpenRouterPreset(t *testing.T) {
+	d, _, _ := newDeps(t)
+	run(t, d, "/provider add openrouter\nopenrouter\n\nexit\n")
+	user, err := settings.Load(d.UserConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := user.Providers["openrouter"]
+	if !ok {
+		t.Fatalf("openrouter 應已寫入 settings.toml: %v", user.Providers)
+	}
+	if p.Type != string(credentials.ProviderTypeOpenAICompat) {
+		t.Fatalf("openrouter 捷徑應落盤為 openai-compat, got %q", p.Type)
+	}
+	if p.BaseURL != "https://openrouter.ai/api/v1" {
+		t.Fatalf("base_url 應採官方端點預設, got %q", p.BaseURL)
+	}
+	// 自訂端點覆蓋預設。
+	run(t, d, "/provider add mirror\nopenrouter\nhttps://mirror.example.com/v1\n\nexit\n")
+	user, err = settings.Load(d.UserConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := user.Providers["mirror"].BaseURL; got != "https://mirror.example.com/v1" {
+		t.Fatalf("自訂 base_url 應覆蓋預設, got %q", got)
+	}
+}
+
+// TestModelSetAllRoles 驗證 /model set all（§3.3）：同一引用一次寫入 §3.1 全部
+// 五個角色；"all" 本身不是角色，不得出現在設定檔 [models] 鍵；/model list 逐列
+// 顯示來源 user。
+func TestModelSetAllRoles(t *testing.T) {
+	d, _, _ := newDeps(t)
+	run(t, d, "/provider add openrouter\nopenrouter\n\n/model set all openrouter/z-ai/glm-5.3-flash\nexit\n")
+	user, err := settings.Load(d.UserConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "openrouter/z-ai/glm-5.3-flash"
+	for _, role := range []string{settings.RoleRecon, settings.RoleReviewer, settings.RoleTriager, settings.RoleProver, settings.RoleReporter} {
+		if got := user.Models[role]; got != want {
+			t.Fatalf("角色 %q 應為 %q, got %q", role, want, got)
+		}
+	}
+	if _, ok := user.Models["all"]; ok {
+		t.Fatalf("\"all\" 不是角色，不得寫入 [models]: %v", user.Models)
+	}
+	list := run(t, d, "/model list\nexit\n")
+	assertAll(t, list, "recon", "reviewer", "triager", "prover", "reporter", want, "user")
+}
+
+// TestModelSetAllRequiresProviderAndRef 驗證 all 展開前的驗證序與單一角色相同：
+// 引用語法與供應商存在性任一不過即拒寫（不得只寫入部分角色）。
+func TestModelSetAllRequiresProviderAndRef(t *testing.T) {
+	d, _, _ := newDeps(t)
+	out := run(t, d, "/model set all not-a-ref\n/model set all ghost/m1\nexit\n")
+	assertAll(t, out, "must be", "不存在")
+	user, err := settings.Load(d.UserConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(user.Models) != 0 {
+		t.Fatalf("驗證失敗不得寫入任何角色路由: %v", user.Models)
+	}
+}
+
 // statusMarkers：/status 輸出含 已設／未設 標記與設定檔路徑（§3.3 /status），
 // 且 Docker 探測不會讓指令失敗（CI 無 docker 亦然）。
 func TestStatusShowsMarkers(t *testing.T) {

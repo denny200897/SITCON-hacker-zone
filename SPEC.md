@@ -201,11 +201,11 @@ LLMAdapter.chat(role, messages, tools, output_schema?, thinking?, stream?) -> Re
 | 指令 | 作用 |
 |------|------|
 | `/provider list` | 列出供應商（名稱、類型、base_url、金鑰**是否已設**——只顯示有無，永不顯示內容） |
-| `/provider add <name>` | 新增供應商（**無內建供應商**）：選 `type`（`anthropic` 或 `openai-compat`），openai-compat 再互動詢問 base_url |
+| `/provider add <name>` | 新增供應商（**無內建供應商**）：選 `type`（`anthropic`、`openai-compat`，或 `openrouter` 捷徑）；openai-compat 再互動詢問 base_url（留空 = 不設定）。`openrouter` 捷徑**不是第三種轉接器**：仍以 `openai-compat` 落盤（§3.2 閉集不變），base_url 直接 Enter 即採 `https://openrouter.ai/api/v1`，也可貼自訂端點（代理／鏡像）覆蓋 |
 | `/provider remove <name>` | 移除供應商（連同其 keychain 金鑰） |
 | `/key set <provider>` | 隱藏輸入（no-echo）token，存入 OS keychain |
 | `/key clear <provider>` | 刪除已存 token |
-| `/model list` / `/model set <role> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由（寫入使用者層級設定）；reset 清空覆寫、回到 repo `aegis.toml` 的定義 |
+| `/model list` / `/model set <role\|all> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由（寫入使用者層級設定）；`role` 給 `all` 時同一引用一次寫入 §3.1 全部五個角色（成本分層的使用者之後仍可逐一覆寫單一角色；`all` 本身不是角色鍵，不得進入 `[models]`）；reset 清空覆寫、回到 repo `aegis.toml` 的定義 |
 | `/status` | 供應商、金鑰狀態、目前路由、Docker 可用性 |
 | `/doctor` | 體檢：Docker、pre-baked 映像檔、供應商連通測試（host 端一次極小呼叫） |
 

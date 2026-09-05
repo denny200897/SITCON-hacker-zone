@@ -9,9 +9,9 @@
   ],
   "detectors": [
     {
-      "id": "py/sql/string-concat",
+      "id": "py.sql.string-concat",
       "path": "detectors/py-sql-concat.yml",
-      "sha256": "5e72598458ad786fbe3fdcbdfc5e8ab2a1cb17184bc9c07d8675b99935cbfead"
+      "sha256": "1305abaeead5e2cf56e0a3d69364f50013101807b1393cf496d828d0725ae43c"
     }
   ],
   "templates": [

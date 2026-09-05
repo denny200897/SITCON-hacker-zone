@@ -1,0 +1,60 @@
+{
+  "snapshot_id": "SN-4be545933a09",
+  "files": [
+    {
+      "path": "app.py",
+      "bytes": 1377,
+      "language": "python",
+      "module": "app"
+    },
+    {
+      "path": "exploit.py",
+      "bytes": 1205,
+      "language": "python",
+      "module": "exploit"
+    }
+  ],
+  "frameworks": [
+    "flask"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "handler_file": "app.py",
+      "handler_line": 32,
+      "handler_symbol": "healthz"
+    },
+    {
+      "method": "GET",
+      "path": "/users/\u003cname\u003e",
+      "handler_file": "app.py",
+      "handler_line": 37,
+      "handler_symbol": "get_user"
+    }
+  ],
+  "entrypoints": [
+    {
+      "kind": "env",
+      "file": "exploit.py",
+      "line": 17,
+      "symbol": "AEGIS_TARGET_URL"
+    },
+    {
+      "kind": "file_read",
+      "file": "exploit.py",
+      "line": 15,
+      "symbol": "\"/aegis/payload.txt\""
+    },
+    {
+      "kind": "file_read",
+      "file": "exploit.py",
+      "line": 20,
+      "symbol": "url"
+    }
+  ],
+  "dependencies": null,
+  "notes": [
+    "requirements.txt 不存在或不可讀"
+  ]
+}

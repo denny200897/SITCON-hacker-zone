@@ -22,10 +22,10 @@ go build -o ./bin/aegis ./cmd/aegis
 /key set anthropic
 /model set prover anthropic/<你的模型 ID>
 /doctor
-/exit
+exit
 ```
 
-`/provider add` 會互動詢問 provider type；OpenAI-compatible provider 也會詢問 `base_url`。API key 優先從 `AEGIS_<PROVIDER>_API_KEY` 讀取，其次為 OS keychain，再其次才是權限 `0600` 的 credentials 檔。金鑰不應放入 `aegis.toml`。
+`/provider add` 會互動詢問 provider type：`anthropic`、`openai-compat`（會再詢問 `base_url`），或 `openrouter` 捷徑——仍以 openai-compat 落盤，`base_url` 直接 Enter 即採 `https://openrouter.ai/api/v1`（可貼自訂端點覆蓋）。`/model set` 的角色可給 `all`，一次把同一個 `<provider>/<model-id>` 設到全部五個角色（之後仍可逐一覆寫單一角色）。API key 優先從 `AEGIS_<PROVIDER>_API_KEY` 讀取，其次為 OS keychain，再其次才是權限 `0600` 的 credentials 檔。金鑰不應放入 `aegis.toml`。
 
 schema、bundled pack、snapshot 與 image 記錄預設放在作業系統的使用者 cache；CI 或受限環境可用絕對路徑 `AEGIS_CACHE_DIR` 覆寫。
 

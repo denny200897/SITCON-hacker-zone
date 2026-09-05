@@ -1,0 +1,16 @@
+[
+  {
+    "candidate_id": "C-0001",
+    "verdict": "PROCEED",
+    "reachability": "D2",
+    "mode": "witness",
+    "missing_links": [
+      {
+        "evidence": "app.py:23",
+        "link": "input wiring"
+      }
+    ],
+    "priority": "high",
+    "rationale": "callable sink exists and needs one input adapter at app.py:23"
+  }
+]

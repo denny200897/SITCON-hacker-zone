@@ -46,6 +46,7 @@ type Runtime struct {
 	// sessions. It is explicit so callers embedding Runtime can retain the
 	// ordinary tool-loop semantics for non-prover roles.
 	StopOnAccepted bool
+	OnResponse     func(turn int, response llm.Response)
 }
 
 // Run 執行 tool loop 至終態（非 tool_use 回應或 submit 被核可）。
@@ -63,6 +64,9 @@ func (rt *Runtime) Run(ctx context.Context, req llm.ChatRequest) (llm.Response, 
 		resp, err := rt.Adapter.Chat(ctx, req)
 		if err != nil {
 			return llm.Response{}, history, err
+		}
+		if rt.OnResponse != nil {
+			rt.OnResponse(turn+1, resp)
 		}
 		if resp.StopReason != llm.StopToolUse {
 			return resp, history, nil

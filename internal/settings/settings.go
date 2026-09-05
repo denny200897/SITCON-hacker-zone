@@ -54,6 +54,13 @@ type Config struct {
 	Providers map[string]Provider `toml:"providers"`
 	Models    map[string]string   `toml:"models"`
 	Budget    Budget              `toml:"budget"`
+	UI        UI                  `toml:"ui"`
+}
+
+// UI contains preferences used only by the interactive terminal interface.
+// An empty language is intentionally interpreted as English by the TUI.
+type UI struct {
+	Language string `toml:"language,omitempty"`
 }
 
 // Budget 對應 [budget]；0 表示該層未設定，由較低優先層或規格預設補上。
@@ -164,7 +171,8 @@ func encodeSorted(c *Config) ([]byte, error) {
 		Providers map[string]Provider `toml:"providers"`
 		Models    map[string]string   `toml:"models"`
 		Budget    Budget              `toml:"budget,omitempty"`
-	}{Providers: providers, Models: models, Budget: c.Budget}
+		UI        UI                  `toml:"ui,omitempty"`
+	}{Providers: providers, Models: models, Budget: c.Budget, UI: c.UI}
 	var buf strings.Builder
 	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
 		return nil, err

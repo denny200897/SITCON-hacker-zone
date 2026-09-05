@@ -85,6 +85,21 @@ func TestSaveUserRoundtrip(t *testing.T) {
 	}
 }
 
+func TestUILanguageRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.toml")
+	cfg := &Config{UI: UI{Language: "zh-TW"}}
+	if err := SaveUser(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.UI.Language != "zh-TW" {
+		t.Fatalf("UI.Language = %q, want zh-TW", loaded.UI.Language)
+	}
+}
+
 // saveUserStableBytes：同一 cfg 存兩次 → 位元組完全相同（確定鍵序，§5.4）。
 func TestSaveUserStableBytes(t *testing.T) {
 	dir := t.TempDir()

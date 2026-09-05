@@ -69,9 +69,9 @@ func TestStageHelpOnlyShowsRelevantFlags(t *testing.T) {
 		want  []string
 		none  []string
 	}{
-		{stage: "scan", want: []string{"--target", "--target-subdir", "--pack", "--run-dir"}, none: []string{"--spec", "--watch", "--hypotheses", "--set-disposition"}},
+		{stage: "scan", want: []string{"--target", "--target-subdir", "--pack", "--run-dir", "--watch"}, none: []string{"--spec", "--hypotheses", "--set-disposition"}},
 		{stage: "prove", want: []string{"--target", "--target-subdir", "--pack", "--run-dir", "--spec", "--watch", "--hypotheses"}, none: []string{"--set-disposition"}},
-		{stage: "report", want: []string{"--target", "--run-dir", "--set-disposition"}, none: []string{"--target-subdir", "--pack", "--spec", "--watch", "--hypotheses"}},
+		{stage: "report", want: []string{"--target", "--run-dir", "--set-disposition", "--watch"}, none: []string{"--target-subdir", "--pack", "--spec", "--hypotheses"}},
 		{stage: "replay", want: []string{"--target", "--run-dir", "--pack"}, none: []string{"--target-subdir", "--spec", "--watch", "--hypotheses", "--set-disposition"}},
 	}
 	for _, tt := range tests {
@@ -125,11 +125,12 @@ func TestNonProvePositionalTargetValidation(t *testing.T) {
 func TestPackCoverageRejectsGoRepoWithPythonOnlyPack(t *testing.T) {
 	p := &packs.Pack{Manifest: &packs.Manifest{
 		PackID:    "python-web",
+		Detectors: []packs.DetectorEntry{{ID: "py.test", Languages: []string{"python"}}},
 		Templates: []packs.TemplateEntry{{AllowedFiles: []string{".py"}}},
 	}}
 	inv := &inventory.Inventory{Files: []inventory.File{{Path: "main.go", Language: "go"}}}
 	err := ensurePackCoversInventory(p, inv, false)
-	if err == nil || !strings.Contains(err.Error(), "覆蓋範圍為零") || !strings.Contains(err.Error(), ".go") {
+	if err == nil || !strings.Contains(err.Error(), "discovery 覆蓋範圍為零") || !strings.Contains(err.Error(), "目標語言為 go") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -137,6 +138,7 @@ func TestPackCoverageRejectsGoRepoWithPythonOnlyPack(t *testing.T) {
 func TestPackCoverageAcceptsMatchingSource(t *testing.T) {
 	p := &packs.Pack{Manifest: &packs.Manifest{
 		PackID:    "python-web",
+		Detectors: []packs.DetectorEntry{{ID: "py.test", Languages: []string{"python"}}},
 		Templates: []packs.TemplateEntry{{AllowedFiles: []string{".py"}}},
 	}}
 	inv := &inventory.Inventory{Files: []inventory.File{{Path: "app.py", Language: "python"}}}
@@ -148,6 +150,7 @@ func TestPackCoverageAcceptsMatchingSource(t *testing.T) {
 func TestLLMReviewerAllowsDiscoveryBeyondProofPack(t *testing.T) {
 	p := &packs.Pack{Manifest: &packs.Manifest{
 		PackID:    "python-web",
+		Detectors: []packs.DetectorEntry{{ID: "py.test", Languages: []string{"python"}}},
 		Templates: []packs.TemplateEntry{{AllowedFiles: []string{".py"}}},
 	}}
 	inv := &inventory.Inventory{Files: []inventory.File{{Path: "main.go", Language: "go"}}}
@@ -200,6 +203,42 @@ func TestGenericVulnerabilityMetadataValidation(t *testing.T) {
 	}
 	if impactForPriority("high") != "high" || impactForPriority("unexpected") != "medium" {
 		t.Fatal("impact fallback mismatch")
+	}
+}
+
+func TestDecodeReviewCandidatesAcceptsStringOrArrayEvidence(t *testing.T) {
+	for _, payload := range []string{
+		`[{"file":"main.go","line":2,"type":"race_condition","evidence":"main.go:2","chain":"request to race"}]`,
+		`{"candidates":[{"file":"main.go","line":2,"type":"race_condition","evidence":[{"file":"main.go","line":2}],"chain":["request","race"]}]}`,
+	} {
+		got, err := decodeReviewCandidates(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || len(got[0].Evidence) != 1 || got[0].Evidence[0] != "main.go:2" || len(got[0].Chain) == 0 {
+			t.Fatalf("decoded = %+v", got)
+		}
+	}
+}
+
+func TestAITracePersistsAndWatchesVisibleEvents(t *testing.T) {
+	dir := t.TempDir()
+	var terminal bytes.Buffer
+	trace, err := openAITrace(dir, &terminal, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := withAITrace(context.Background(), trace, "review-batch-1")
+	emitAITrace(ctx, "reviewer", "response", `{"analysis_summary":"checked auth flow"}`)
+	if err := trace.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(terminal.String(), "review-batch-1") || !strings.Contains(terminal.String(), "checked auth flow") {
+		t.Fatalf("terminal trace = %s", terminal.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "ai-events.jsonl"))
+	if err != nil || !strings.Contains(string(data), `"kind":"response"`) {
+		t.Fatalf("persisted trace = %s err=%v", data, err)
 	}
 }
 

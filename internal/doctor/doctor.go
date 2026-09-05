@@ -78,11 +78,10 @@ type Options struct {
 // ---- 預設值與小工具 ----
 
 const (
-	// probeMaxTokens 是連通探測請求的 MaxTokens 意圖值。實際送出的值受
-	// internal/llm 的起跳值約束（非串流 16000，§18.3）——探測本身已是最小
-	// 請求形狀（單則 "ping"、無 tools、無 system、非串流），此處僅表達
-	// 「越小越好」的意圖；壓低起跳值屬 llm 契約，本包不改（§23-2）。
-	probeMaxTokens = 16
+	// OpenAI-compatible reasoning models may spend part of max_tokens on hidden
+	// reasoning. A 16-token probe can return HTTP 200 with no visible content and
+	// look like a refusal. 256 is still cheap but leaves room for a visible reply.
+	probeMaxTokens = 256
 
 	// probeTimeout 是 docker version／docker image inspect 等短探測的固定上界
 	//（與 internal/sandbox.Available 的 20s 探測慣例一致）。
@@ -527,7 +526,7 @@ func dockerRepoDigests(ctx context.Context, bin, ref string) ([]string, error) {
 //   - 金鑰未解析（Resolve 錯誤或空金鑰）→ OK=false、detail 固定「金鑰未設定」
 //     （永不回顯金鑰內容，§3.3 /provider list 慣例）。
 //   - 金鑰可用 → 依 §3.2 閉集建 adapter，對 base_url 做一次極小呼叫
-//     （單則 "ping"、無 tools、非串流）；任何錯誤 → OK=false，detail 取
+//     （單則明確的 harmless/OK 請求、無 tools、非串流）；任何錯誤 → OK=false，detail 取
 //     截尾錯誤文字（出口處再做金鑰遮蔽）。
 func checkProviders(ctx context.Context, o Options, secrets *[]string) []Check {
 	names := make([]string, 0, len(o.Providers))
@@ -591,8 +590,8 @@ func checkProviders(ctx context.Context, o Options, secrets *[]string) []Check {
 		req := llm.ChatRequest{
 			Role:     requestRole,
 			Model:    model,
-			Messages: []llm.Message{{Role: "user", Content: []llm.ContentBlock{{Type: "text", Text: "ping"}}}},
-			// MaxTokens 16（見 probeMaxTokens 註記：實送值受 llm 起跳值約束）。
+			Messages: []llm.Message{{Role: "user", Content: []llm.ContentBlock{{Type: "text", Text: "This is a harmless API connectivity check. Reply with exactly OK."}}}},
+			// Leave enough output budget for reasoning-model compatibility.
 			MaxTokens: probeMaxTokens,
 			Stream:    false, // 非串流；無 tools（§3.3：極小呼叫）
 		}
@@ -604,7 +603,7 @@ func checkProviders(ctx context.Context, o Options, secrets *[]string) []Check {
 			c.Detail = trunc(err.Error()) // 出口統一遮蔽金鑰（Run 尾端）
 		} else if resp.StopReason == llm.StopRefusal {
 			c.OK = false
-			c.Detail = fmt.Sprintf("模型拒絕連通探測（role=%s，requested_model=%s，actual_model=%s，category=%s）", role, model, resp.Model, resp.RefusalCategory)
+			c.Detail = fmt.Sprintf("API 已連通，但模型未提供可用回覆（role=%s，requested_model=%s，actual_model=%s，category=%s）；empty_response 請改用支援 Chat Completions 文字輸出的模型，其他 category 請更換未拒絕資安用途的模型", role, model, resp.Model, resp.RefusalCategory)
 		} else if model != "" && resp.Model != "" && resp.Model != model {
 			c.OK = false
 			c.Detail = fmt.Sprintf("模型路由不一致（role=%s，requested_model=%s，actual_model=%s，stop_reason=%s）", role, model, resp.Model, resp.StopReason)

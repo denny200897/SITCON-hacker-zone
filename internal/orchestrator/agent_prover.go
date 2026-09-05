@@ -105,10 +105,11 @@ type AgentProver struct {
 	Model  string
 	System string // system prompt（prompt 版本化 §18.4：第一行 version:）
 
-	Finding  FindingContext
-	Budget   budget.Budget // 迴圈級預算（§9.3 計數器在此扣抵）
-	RunDir   string        // artifacts 根（<RunDir>/evidence/runs/<runID>/）
-	MaxTurns int           // 單一 session 的 tool loop 上限（agent.MaxTurns 預設）
+	Finding    FindingContext
+	Budget     budget.Budget // 迴圈級預算（§9.3 計數器在此扣抵）
+	RunDir     string        // artifacts 根（<RunDir>/evidence/runs/<runID>/）
+	MaxTurns   int           // 單一 session 的 tool loop 上限（agent.MaxTurns 預設）
+	OnResponse func(turn int, response llm.Response)
 }
 
 // Run 執行 prover 迴圈至 §9.3 終態。
@@ -148,7 +149,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 
 	for {
 		ap.Tools.ResetSession()
-		runtime := &agent.Runtime{Adapter: ap.Adapter, Tools: ap.Tools, MaxTurns: ap.sessionTurns(), StopOnAccepted: true}
+		runtime := &agent.Runtime{Adapter: ap.Adapter, Tools: ap.Tools, MaxTurns: ap.sessionTurns(), StopOnAccepted: true, OnResponse: ap.OnResponse}
 		resp, history, err := runtime.Run(ctx, ap.chatRequest(msgs))
 		if fatalJournalErr != nil {
 			return nil, fmt.Errorf("orchestrator: rejected-spec journal: %w", fatalJournalErr)

@@ -25,7 +25,8 @@
         "properties": {
           "id": {"type": "string"},
           "path": {"type": "string"},
-          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "languages": {"type": "array", "items": {"type": "string"}, "description": "detector discovery 適用語言；與 proof runtime 分離"}
         }
       }
     },

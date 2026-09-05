@@ -44,10 +44,23 @@ type ToolRegistry struct {
 	// audit 記錄器；nil 時不記（僅測試）。
 	audit        *AuditLog
 	acceptedSpec bool
+	observer     func(ToolEvent)
+}
+
+type ToolEvent struct {
+	Role    llm.Role
+	Tool    string
+	Kind    string // call | result
+	Content string
+	IsError bool
 }
 
 // SetAudit 綁定 audit log。
 func (t *ToolRegistry) SetAudit(a *AuditLog) { t.audit = a }
+
+// SetObserver receives a redacted operator-facing copy of allowed tool activity.
+// It is observability only; audit.jsonl remains the fail-closed security record.
+func (t *ToolRegistry) SetObserver(observer func(ToolEvent)) { t.observer = observer }
 
 // ResetSession clears the one-accepted-spec terminal guard for a newly created
 // prover session. It does not clear the prover's cross-session duplicate hash
@@ -95,6 +108,9 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 	if err := t.audit.Append(role, tool, auditInput, AuditAllowed, "preflight"); err != nil {
 		return auditFailure(err)
 	}
+	if t.observer != nil {
+		t.observer(ToolEvent{Role: role, Tool: tool, Kind: "call", Content: string(auditInput)})
+	}
 
 	var res Result
 	switch tool {
@@ -121,6 +137,9 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 		if err := t.audit.Append(role, tool, auditInput, decision, "tool_result"); err != nil {
 			return auditFailure(err)
 		}
+	}
+	if t.observer != nil {
+		t.observer(ToolEvent{Role: role, Tool: tool, Kind: "result", Content: res.Content, IsError: res.IsError})
 	}
 	return res
 }

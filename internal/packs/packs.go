@@ -56,6 +56,9 @@ type DetectorEntry struct {
 	ID     string `json:"id"`
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256,omitempty"`
+	// Languages 是 detector 的靜態適用語言；只描述 candidate discovery，
+	// 不代表 template runtime 或 oracle proof 能執行該語言。
+	Languages []string `json:"languages,omitempty"`
 }
 
 // TemplateEntry 是 witness／direct 共用的模板條目。

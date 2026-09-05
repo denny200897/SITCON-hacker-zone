@@ -199,6 +199,12 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 		b.WriteString("- `coverage.json`（實際 pack／detector／語言覆蓋範圍）\n")
 	}
 	b.WriteString("- `findings.json`（機讀全量）\n- `findings.sarif`（IDE/CI 整合）\n")
+	if _, err := os.Stat(filepath.Join(dir, "ai-events.jsonl")); err == nil {
+		b.WriteString("- `ai-events.jsonl`（AI 階段、可見回覆與工具活動）\n")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "audit.jsonl")); err == nil {
+		b.WriteString("- `audit.jsonl`（政策閘與工具呼叫稽核）\n")
+	}
 	if st, err := os.Stat(filepath.Join(dir, "guardrails")); err == nil && st.IsDir() {
 		b.WriteString("- `guardrails/`（已驗證絆線）\n")
 	}
@@ -220,17 +226,21 @@ func writeCoverage(b *strings.Builder, runDir string) {
 		return
 	}
 	var coverage struct {
-		PackID                string   `json:"pack_id"`
-		PackVersion           string   `json:"pack_version"`
-		VerifiableExtensions  []string `json:"verifiable_extensions"`
-		TargetExtensions      []string `json:"target_extensions"`
-		UncoveredExtensions   []string `json:"uncovered_extensions"`
-		DetectorIDs           []string `json:"detector_ids"`
-		ExecutedDetectorIDs   []string `json:"executed_detector_ids"`
-		DetectorNotes         []string `json:"detector_notes"`
-		SinkTypes             []string `json:"sink_types"`
-		LLMReviewerConfigured bool     `json:"llm_reviewer_configured"`
-		DiscoveryMode         string   `json:"discovery_mode"`
+		PackID                 string   `json:"pack_id"`
+		PackVersion            string   `json:"pack_version"`
+		VerifiableExtensions   []string `json:"verifiable_extensions"`
+		ProofRuntimeExtensions []string `json:"proof_runtime_extensions"`
+		TargetExtensions       []string `json:"target_extensions"`
+		TargetLanguages        []string `json:"target_languages"`
+		UncoveredExtensions    []string `json:"uncovered_extensions"`
+		DetectorIDs            []string `json:"detector_ids"`
+		DetectorLanguages      []string `json:"detector_languages"`
+		ExecutedDetectorIDs    []string `json:"executed_detector_ids"`
+		DetectorNotes          []string `json:"detector_notes"`
+		SinkTypes              []string `json:"sink_types"`
+		ProofFamilies          []string `json:"proof_families"`
+		LLMReviewerConfigured  bool     `json:"llm_reviewer_configured"`
+		DiscoveryMode          string   `json:"discovery_mode"`
 	}
 	if err := json.Unmarshal(data, &coverage); err != nil {
 		b.WriteString("- 審查覆蓋資訊：無法解析 `coverage.json`\n\n")
@@ -238,13 +248,15 @@ func writeCoverage(b *strings.Builder, runDir string) {
 	}
 	fmt.Fprintf(b, "- 實際載入 pack：`%s@%s`\n", coverage.PackID, coverage.PackVersion)
 	fmt.Fprintf(b, "- 候選發現模式：`%s`\n", coverage.DiscoveryMode)
-	fmt.Fprintf(b, "- 可實證原始碼：%s；目標原始碼：%s\n", displayList(coverage.VerifiableExtensions), displayList(coverage.TargetExtensions))
-	fmt.Fprintf(b, "- 已設定 detector：%s；成功執行：%s；候選 sink 類型：%s；LLM reviewer：%t\n", displayList(coverage.DetectorIDs), displayList(coverage.ExecutedDetectorIDs), displayList(coverage.SinkTypes), coverage.LLMReviewerConfigured)
+	fmt.Fprintf(b, "- LLM discovery 目標語言：%s（副檔名 %s）\n", displayList(coverage.TargetLanguages), displayList(coverage.TargetExtensions))
+	fmt.Fprintf(b, "- Semgrep detector：%s；規則語言：%s；成功執行：%s\n", displayList(coverage.DetectorIDs), displayList(coverage.DetectorLanguages), displayList(coverage.ExecutedDetectorIDs))
+	fmt.Fprintf(b, "- Proof runtime 可執行 witness 副檔名：%s；具可信 oracle 的漏洞家族：%s\n", displayList(coverage.ProofRuntimeExtensions), displayList(coverage.ProofFamilies))
+	fmt.Fprintf(b, "- Pack 登錄候選 sink 類型：%s；LLM reviewer：%t\n", displayList(coverage.SinkTypes), coverage.LLMReviewerConfigured)
 	for _, note := range coverage.DetectorNotes {
 		fmt.Fprintf(b, "- Detector 降級：%s\n", note)
 	}
 	if len(coverage.UncoveredExtensions) > 0 {
-		fmt.Fprintf(b, "- **尚無機械 proof 的原始碼類型：%s**（LLM reviewer 仍會審查）\n", displayList(coverage.UncoveredExtensions))
+		fmt.Fprintf(b, "- **Proof runtime 尚不能執行：%s**（LLM reviewer 仍會審查；這不是 Semgrep 的限制）\n", displayList(coverage.UncoveredExtensions))
 	}
 	b.WriteString("\n")
 }

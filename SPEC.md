@@ -495,6 +495,7 @@ pack 是有版本契約的模組，每包必附 manifest，core 載入前驗證�
 - **資料最小化**：每個角色只取得其任務所需範圍（recon 拿結構、reviewer 拿分區、prover 拿 sink 鄰域），不整庫灌入。
 - **repo secrets 偵測**（獨立於自身 API key redaction）：送 LLM 前掃 repo 內疑似 secrets；命中即停止要求確認（或顯式 `--allow-secrets`），預設不送。判定用**封閉樣式清單**（regex 存 `internal/redaction/patterns.go`，以 `regexp.MustCompile` 編譯——RE2 語法，清單內不得使用 lookahead／backreference；送 LLM 前與落盤前共用同一份）：`AKIA[0-9A-Z]{16}`、`sk-ant-`、`sk-[A-Za-z0-9]{20,}`、`ghp_`／`gho_`、`-----BEGIN … PRIVATE KEY-----`、`xox[baprs]-`、`(?i)(api_?key|secret|password|token)\s*[=:]\s*\S{8,}`。
 - **政策驗證 + audit log**：所有 LLM tool call（`read_code`／`search_code`／`semgrep`／`submit_witness_spec`）經政策檢查並記錄，供事後審查「模型讀了什麼、送了什麼」。
+- **可觀測 AI event stream**：`--watch` 逐行顯示各角色階段、模型實際可見回覆、公開 `analysis_summary`、工具呼叫與結果；同份遮蔽後事件以 `0600` 寫入 `ai-events.jsonl`。不得把供應商未提供的隱藏 chain-of-thought 偽裝成可觀測資料。
 - 注入掃描（"ignore previous instructions" 等模式）僅為 triage 標註輔助，**不作為安全邊界**。
 - orchestrator 對 prover 的指示以 **mid-conversation system 訊息**（operator channel）下達，不經 repo 內容傳遞。
 - 落盤（log、evidence、report）前掃 secrets 再寫入。
@@ -516,7 +517,8 @@ aegis console                 # 同上
 aegis scan                    # Stage 0–2：不執行目標 repo 代碼；會執行受信任的 semgrep/core detector
 aegis prove [F-ID]            # Stage 3：對指定 finding（或全部）跑證明迴圈
 aegis report                  # Stage 4：產 report.md / findings.json / SARIF / guardrails/
-aegis prove F-0007 --watch    # 觀察單一 finding 的 prover 迴圈過程
+aegis review --watch          # 觀察 recon/reviewer/triager/prover/reporter、公開摘要、回覆與工具活動
+aegis prove F-0007 --watch    # 只觀察單一 finding 的 prover 迴圈過程
 ```
 
 - `aegis scan` 預設掃當前目錄；`--target <path>` 指定 repo root、`--target-subdir` 限縮子樹（§14.3）。

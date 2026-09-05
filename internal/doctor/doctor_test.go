@@ -449,7 +449,7 @@ func TestProviderConnectTimeoutApplied(t *testing.T) {
 	if cap.deadline < 4*time.Second || cap.deadline > 6*time.Second {
 		t.Errorf("connect deadline = %v, want ~5s", cap.deadline)
 	}
-	// 極小呼叫形狀（§3.3）：MaxTokens 16、非串流、無 tools、單則短訊息。
+	// 小額呼叫形狀（§3.3）：保留 reasoning model 的可見輸出空間、非串流、無 tools。
 	// （req 形狀由 adapter 測試覆蓋；此處驗證 doctor 端的請求組裝。）
 	o2 := o
 	var lastReq llm.ChatRequest
@@ -463,6 +463,9 @@ func TestProviderConnectTimeoutApplied(t *testing.T) {
 	}
 	if len(lastReq.Messages) != 1 || len(lastReq.Tools) != 0 {
 		t.Errorf("Messages = %d, Tools = %d, want 單則無工具", len(lastReq.Messages), len(lastReq.Tools))
+	}
+	if got := lastReq.Messages[0].Content[0].Text; !strings.Contains(got, "Reply with exactly OK") {
+		t.Errorf("probe prompt = %q, want explicit harmless OK request", got)
 	}
 }
 
@@ -484,8 +487,8 @@ func TestProviderProbeUsesConfiguredRoleModelAndRefusalFails(t *testing.T) {
 	if lastReq.Model != "configured-model" {
 		t.Fatalf("probe model = %q, want configured-model", lastReq.Model)
 	}
-	if !strings.Contains(c.Detail, "requested_model=configured-model") || !strings.Contains(c.Detail, "refusal") && !strings.Contains(c.Detail, "拒絕") {
-		t.Fatalf("detail 未說明實際路由與拒絕：%s", c.Detail)
+	if !strings.Contains(c.Detail, "requested_model=configured-model") || !strings.Contains(c.Detail, "API 已連通") || !strings.Contains(c.Detail, "category=cyber") {
+		t.Fatalf("detail 未區分連通與模型拒絕：%s", c.Detail)
 	}
 }
 

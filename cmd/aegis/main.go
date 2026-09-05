@@ -76,7 +76,7 @@ func newReview() *cobra.Command {
 	c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制審查子樹")
 	c.Flags().StringVar(&runDir, "run-dir", "", "指定新 run 目錄")
 	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
-	c.Flags().BoolVar(&watch, "watch", false, "逐行顯示證明進度")
+	c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 回覆、公開摘要與工具活動")
 	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
@@ -107,6 +107,9 @@ func newReview() *cobra.Command {
 		scanArgs := []string{"scan", "--target", target, "--run-dir", runDir, "--pack", packDir}
 		if targetSubdir != "" {
 			scanArgs = append(scanArgs, "--target-subdir", targetSubdir)
+		}
+		if watch {
+			scanArgs = append(scanArgs, "--watch")
 		}
 		if err := run(scanArgs...); err != nil {
 			return err
@@ -150,7 +153,11 @@ func newReview() *cobra.Command {
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "找到 %d 個 finding，但目前 pack 尚無對應 proof；保留於報告並略過 prove/replay\n", len(findings))
 		}
-		if err := run("report", "--target", scanRoot, "--run-dir", runDir); err != nil {
+		reportArgs := []string{"report", "--target", scanRoot, "--run-dir", runDir}
+		if watch {
+			reportArgs = append(reportArgs, "--watch")
+		}
+		if err := run(reportArgs...); err != nil {
 			return err
 		}
 		if verificationErr != nil {
@@ -190,10 +197,10 @@ func runConsole(ctx context.Context, in io.Reader, out io.Writer) error {
 		},
 		RunCommand: runInteractiveCommand,
 	}
-	// 真實終端機（stdin/stdout 皆為 tty）進對話式 TUI；管道／CI／測試自動退回
-	// 純文字 REPL，維持既有腳本與單元測試行為不變（§23：stdlib-only 測試路徑）。
-	if f, ok := out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		if sf, ok := in.(*os.File); ok && term.IsTerminal(int(sf.Fd())) {
+	// Use the full-screen TUI only when both streams are attached to a terminal.
+	// Pipes, CI jobs, and tests retain the stable plain-text console behavior.
+	if outputFile, ok := out.(*os.File); ok && term.IsTerminal(int(outputFile.Fd())) {
+		if inputFile, ok := in.(*os.File); ok && term.IsTerminal(int(inputFile.Fd())) {
 			return tui.Run(deps)
 		}
 	}
@@ -286,9 +293,11 @@ func newStage(name, short string) *cobra.Command {
 	if name == "scan" || name == "prove" || name == "replay" {
 		c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
 	}
+	if name == "scan" || name == "prove" || name == "report" {
+		c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 回覆、階段與工具活動")
+	}
 	if name == "prove" {
 		c.Flags().StringVar(&specPath, "spec", "", "WitnessSpec JSON")
-		c.Flags().BoolVar(&watch, "watch", false, "逐行顯示進度")
 		c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限（預設讀 [budget]，未設定為 3）")
 	}
 	if name == "report" {
@@ -355,6 +364,12 @@ func newStage(name, short string) *cobra.Command {
 				return stageError(name, err)
 			}
 			defer j.Close()
+			trace, err := openAITrace(runDir, cmd.OutOrStdout(), watch)
+			if err != nil {
+				return stageError(name, err)
+			}
+			defer trace.Close()
+			scanCtx := withAITrace(cmd.Context(), trace, "scan")
 			if _, err := j.Append("run_started", "", map[string]any{"stage": "scan"}); err != nil {
 				return stageError(name, err)
 			}
@@ -363,7 +378,8 @@ func newStage(name, short string) *cobra.Command {
 			}
 			coverage := packCoverage(pack, inv, reviewerConfigured)
 			if len(coverage.UncoveredExtensions) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "提示：LLM 仍會審查，但 pack %s 不可機械實證部分原始碼類型：%s\n", coverage.PackID, strings.Join(coverage.UncoveredExtensions, ", "))
+				fmt.Fprintf(cmd.OutOrStdout(), "提示：LLM discovery 仍會審查 %s；目前 proof runtime %s@%s 只接受 %s，無法執行這些語言的 witness。Semgrep detector 只是候選來源，不是此限制的原因。\n",
+					strings.Join(coverage.UncoveredExtensions, ", "), coverage.PackID, coverage.PackVersion, displayCLIList(coverage.ProofRuntimeExtensions))
 			}
 			data, err := json.MarshalIndent(inv, "", "  ")
 			if err != nil {
@@ -407,7 +423,7 @@ func newStage(name, short string) *cobra.Command {
 				return stageError(name, err)
 			}
 			if reviewerConfigured {
-				llmCandidates, reviewErr := runLLMScan(cmd.Context(), root, snap.Dir, inv, pack)
+				llmCandidates, reviewErr := runLLMScan(scanCtx, root, snap.Dir, inv, pack)
 				if reviewErr != nil {
 					return stageError(name, reviewErr)
 				}
@@ -439,7 +455,7 @@ func newStage(name, short string) *cobra.Command {
 				}
 				t := triage.EvaluateAt(c, inv, snap.Dir)
 				if roleConfigured(root, settings.RoleTriager) {
-					comment, triageErr := runLLMTriage(cmd.Context(), root, c, t)
+					comment, triageErr := runLLMTriage(scanCtx, root, c, t)
 					if triageErr != nil {
 						return stageError(name, fmt.Errorf("triager 失敗：%w", triageErr))
 					}
@@ -584,7 +600,12 @@ func newStage(name, short string) *cobra.Command {
 			// 空 findings 不交給模型自由發揮。沒有逐項證據時，模型很容易
 			// 杜撰未執行的 SAST/DAST/合規方法，確定性模板才是可信輸出。
 			if len(findings) > 0 && roleConfigured(target, settings.RoleReporter) {
-				path, err = writeLLMReport(cmd.Context(), target, runDir, findings)
+				trace, traceErr := openAITrace(runDir, cmd.OutOrStdout(), watch)
+				if traceErr != nil {
+					return stageError(name, traceErr)
+				}
+				defer trace.Close()
+				path, err = writeLLMReport(withAITrace(cmd.Context(), trace, "report"), target, runDir, findings)
 				if err != nil {
 					return stageError(name, fmt.Errorf("reporter 失敗：%w", err))
 				}
@@ -746,6 +767,7 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	var registry *schemav.Registry
 	var toolsRegistry *agent.ToolRegistry
 	var audit *agent.AuditLog
+	proveCtx := cmd.Context()
 	if manualSpec == nil {
 		adapter, model, err = proverAdapter(scanRoot)
 		if err != nil {
@@ -785,6 +807,20 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 		}
 		defer audit.Close()
 		toolsRegistry.SetAudit(audit)
+		trace, traceErr := openAITrace(opts.runDir, cmd.OutOrStdout(), opts.watch)
+		if traceErr != nil {
+			return stageError("prove", traceErr)
+		}
+		defer trace.Close()
+		proveCtx = withAITrace(cmd.Context(), trace, "prove")
+		toolsRegistry.SetObserver(func(event agent.ToolEvent) {
+			kind := "tool_" + event.Kind
+			content := fmt.Sprintf("%s %s", event.Tool, event.Content)
+			if event.IsError {
+				content = "ERROR " + content
+			}
+			emitAITrace(proveCtx, string(event.Role), kind, content)
+		})
 	}
 
 	for _, finding := range selected {
@@ -842,8 +878,20 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 				}, Model: model, System: proverSystemPrompt,
 				Finding: orchestrator.FindingContext{FindingID: findingID, Reachability: reachability, TargetSymbol: stringValue(sink["symbol"]),
 					OracleID: oracleForSink(pack, stringValue(sink["type"])), SnapshotID: snapshotID, Context: contextText},
-				Budget: b, RunDir: opts.runDir}
-			res, proveErr := ap.Run(cmd.Context())
+				Budget: b, RunDir: opts.runDir,
+				OnResponse: func(turn int, response llm.Response) {
+					var reply strings.Builder
+					for _, block := range response.Content {
+						if block.Type == "text" {
+							reply.WriteString(block.Text)
+						}
+						if block.Type == "tool_use" && block.ToolUse != nil {
+							fmt.Fprintf(&reply, "\n→ tool %s %s", block.ToolUse.Name, block.ToolUse.Input)
+						}
+					}
+					emitAITrace(withAIPhase(proveCtx, fmt.Sprintf("prove-%s-turn-%d", findingID, turn)), string(llm.RoleProver), "response", reply.String())
+				}}
+			res, proveErr := ap.Run(proveCtx)
 			if proveErr != nil {
 				return stageError("prove", proveErr)
 			}
@@ -1153,37 +1201,43 @@ func findingID(candidateID string) string { return "F-" + strings.TrimPrefix(can
 // compatibility signal than a pack name convention such as "python-web".
 func ensurePackCoversInventory(pack *packs.Pack, inv *inventory.Inventory, reviewerConfigured bool) error {
 	coverage := packCoverage(pack, inv, reviewerConfigured)
-	allowed := stringSliceMap(coverage.VerifiableExtensions)
-	if len(allowed) == 0 {
-		return fmt.Errorf("pack %q 未宣告任何可驗證的原始碼副檔名", pack.Manifest.PackID)
-	}
-	if len(coverage.MatchedExtensions) > 0 {
-		return nil
-	}
 	if reviewerConfigured {
 		return nil
 	}
-	return fmt.Errorf("覆蓋範圍為零：pack %q 只能實證 %s，但目標原始碼為 %s；拒絕產生『0 弱點』報告，請安裝相符的 pack",
-		pack.Manifest.PackID, sortedMapKeys(allowed), strings.Join(coverage.TargetExtensions, ", "))
+	if len(coverage.DetectorIDs) == 0 {
+		return errors.New("discovery 覆蓋範圍為零：未設定 LLM reviewer，pack 也沒有 detector")
+	}
+	detectorLanguages := stringSliceMap(coverage.DetectorLanguages)
+	for _, language := range coverage.TargetLanguages {
+		if detectorLanguages[language] {
+			return nil
+		}
+	}
+	return fmt.Errorf("discovery 覆蓋範圍為零：未設定 LLM reviewer，Semgrep detector 語言為 %s，目標語言為 %s；拒絕產生『0 弱點』報告。請設定 reviewer 或提供相符 detector",
+		displayCLIList(coverage.DetectorLanguages), displayCLIList(coverage.TargetLanguages))
 }
 
 type coverageRecord struct {
-	PackID                string   `json:"pack_id"`
-	PackVersion           string   `json:"pack_version"`
-	VerifiableExtensions  []string `json:"verifiable_extensions"`
-	TargetExtensions      []string `json:"target_extensions"`
-	MatchedExtensions     []string `json:"matched_extensions"`
-	UncoveredExtensions   []string `json:"uncovered_extensions,omitempty"`
-	DetectorIDs           []string `json:"detector_ids"`
-	ExecutedDetectorIDs   []string `json:"executed_detector_ids"`
-	DetectorNotes         []string `json:"detector_notes,omitempty"`
-	SinkTypes             []string `json:"sink_types"`
-	LLMReviewerConfigured bool     `json:"llm_reviewer_configured"`
-	DiscoveryMode         string   `json:"discovery_mode"`
+	PackID                 string   `json:"pack_id"`
+	PackVersion            string   `json:"pack_version"`
+	VerifiableExtensions   []string `json:"verifiable_extensions"`
+	ProofRuntimeExtensions []string `json:"proof_runtime_extensions"`
+	TargetExtensions       []string `json:"target_extensions"`
+	TargetLanguages        []string `json:"target_languages"`
+	MatchedExtensions      []string `json:"matched_extensions"`
+	UncoveredExtensions    []string `json:"uncovered_extensions,omitempty"`
+	DetectorIDs            []string `json:"detector_ids"`
+	DetectorLanguages      []string `json:"detector_languages"`
+	ExecutedDetectorIDs    []string `json:"executed_detector_ids"`
+	DetectorNotes          []string `json:"detector_notes,omitempty"`
+	SinkTypes              []string `json:"sink_types"`
+	ProofFamilies          []string `json:"proof_families"`
+	LLMReviewerConfigured  bool     `json:"llm_reviewer_configured"`
+	DiscoveryMode          string   `json:"discovery_mode"`
 }
 
 func packCoverage(pack *packs.Pack, inv *inventory.Inventory, reviewer bool) coverageRecord {
-	allowed, target := map[string]bool{}, map[string]bool{}
+	allowed, target, targetLanguages := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, tmpl := range pack.Manifest.Templates {
 		for _, ext := range tmpl.AllowedFiles {
 			allowed[strings.ToLower(ext)] = true
@@ -1195,6 +1249,7 @@ func packCoverage(pack *packs.Pack, inv *inventory.Inventory, reviewer bool) cov
 		}
 		if ext := strings.ToLower(filepath.Ext(file.Path)); ext != "" {
 			target[ext] = true
+			targetLanguages[file.Language] = true
 		}
 	}
 	matched, uncovered := map[string]bool{}, map[string]bool{}
@@ -1206,7 +1261,7 @@ func packCoverage(pack *packs.Pack, inv *inventory.Inventory, reviewer bool) cov
 		}
 	}
 	record := coverageRecord{PackID: pack.Manifest.PackID, PackVersion: pack.Manifest.Version,
-		VerifiableExtensions: stringsToSortedSlice(allowed), TargetExtensions: stringsToSortedSlice(target),
+		VerifiableExtensions: stringsToSortedSlice(allowed), ProofRuntimeExtensions: stringsToSortedSlice(allowed), TargetExtensions: stringsToSortedSlice(target), TargetLanguages: stringsToSortedSlice(targetLanguages),
 		MatchedExtensions: stringsToSortedSlice(matched), UncoveredExtensions: stringsToSortedSlice(uncovered),
 		LLMReviewerConfigured: reviewer, DiscoveryMode: "detectors-only"}
 	if reviewer {
@@ -1214,13 +1269,31 @@ func packCoverage(pack *packs.Pack, inv *inventory.Inventory, reviewer bool) cov
 	}
 	for _, detector := range pack.Manifest.Detectors {
 		record.DetectorIDs = append(record.DetectorIDs, detector.ID)
+		record.DetectorLanguages = append(record.DetectorLanguages, detector.Languages...)
 	}
 	for _, sink := range pack.Manifest.SinkTypes {
 		record.SinkTypes = append(record.SinkTypes, sink.Type)
 	}
+	proofFamilies := map[string]bool{}
+	for _, tmpl := range pack.Manifest.Templates {
+		for _, oracle := range pack.Manifest.Oracles {
+			if tmpl.Family == oracle.Family && oracle.Touch != nil {
+				proofFamilies[tmpl.Family] = true
+			}
+		}
+	}
+	record.ProofFamilies = stringsToSortedSlice(proofFamilies)
 	sort.Strings(record.DetectorIDs)
+	record.DetectorLanguages = stringsToSortedSlice(stringSliceMap(record.DetectorLanguages))
 	sort.Strings(record.SinkTypes)
 	return record
+}
+
+func displayCLIList(values []string) string {
+	if len(values) == 0 {
+		return "（無）"
+	}
+	return strings.Join(values, ", ")
 }
 
 func stringSliceMap(values []string) map[string]bool {
@@ -1238,18 +1311,6 @@ func stringsToSortedSlice(values map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func sortedMapKeys(values map[string]bool) string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	if len(keys) == 0 {
-		return "（無可辨識副檔名）"
-	}
-	return strings.Join(keys, ", ")
 }
 
 func latestRunDir(root string) string {

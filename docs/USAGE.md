@@ -26,6 +26,12 @@ go build -o ./bin/aegis ./cmd/aegis
 exit
 ```
 
+真實終端機預設啟動英文 TUI；輸入 `/lang zh` 可切換為繁體中文，`/lang en`
+切回英文。語言偏好會寫入使用者 `settings.toml`。TUI 執行審查命令時會自動開啟
+AI 回覆與工具活動串流；pipe、CI 與測試環境仍使用原有純文字 console。
+TUI 不攔截滑鼠，因此可直接拖曳選取後用 macOS `Cmd+C`；也可輸入 `/copy`
+或按 `Ctrl+Y`，一次複製目前完整 transcript（ANSI 色碼會先移除）。
+
 互動模式可直接執行完整流水線；`/review`、`/scan`、`/prove`、`/report`、`/replay`
 接受與同名一次性 CLI 完全相同的參數。含空白的路徑可使用單引號或雙引號。
 
@@ -72,6 +78,33 @@ LLM reviewer 採兩階段全局審查：先分批讀取跨語言原始碼與設�
 
 inventory 目前辨識 Python、Go、JavaScript/TypeScript、Java/Kotlin、PHP、Ruby、
 C#、Rust、Scala、Vue、Svelte，以及常見 markup、設定檔、shell 與 Dockerfile。
+未列入辨識表、但具有非資料型副檔名且內容是 UTF-8 文字的檔案，也會以未知語言
+原始碼送交 reviewer；`.txt/.csv/.log/.lock/.map` 等資料或產物預設不送出。
+
+加入 `--watch` 可在終端看到各 AI 階段、實際模型回覆、公開的
+`analysis_summary`、prover 工具呼叫與工具結果：
+
+```sh
+./bin/aegis review --target /path/to/repo --watch
+```
+
+完整可稽核事件會寫入 run 目錄的 `ai-events.jsonl`；政策閘決策與工具參數仍寫在
+`audit.jsonl`。兩者皆為權限 `0600`。供應商未回傳、或屬於模型內部的隱藏
+chain-of-thought 不會也不能被偽造展示；介面顯示的是模型實際可見輸出與證據摘要。
+
+### Detector、build runtime 與 proof oracle
+
+三種能力分開呈現於 `coverage.json` 與報告：
+
+- Semgrep detector 只快速產生 pattern candidate；其 `languages` 不代表能 build。
+- Proof runtime 由 template 的 digest-pinned image、service command 與允許的 witness
+  檔案決定。AI 不能任意挑 host compiler 或可變 Docker image，以免繞過 sandbox。
+- 成功 build 只證明環境可編譯／啟動，不等於漏洞成立。`PROVEN` 還必須由該漏洞
+  家族的可信 oracle 觀察到 nonce-backed 副作用。
+
+因此「proof runtime 不能執行 `.go`」表示目前缺 Go 的固定建置／啟動 backend，
+不是 Semgrep 禁止掃 Go。LLM 仍會審查並回報 Go finding；在 Go runtime 和對應
+oracle 加入前，它會清楚維持未機械實證狀態。
 
 `scan`、`prove`、`replay`、`report` 仍保留作為 CI、除錯與斷點續跑的進階介面：
 

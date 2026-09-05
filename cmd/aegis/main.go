@@ -38,6 +38,7 @@ import (
 	"github.com/aegis-dev/aegis/internal/schemav"
 	"github.com/aegis-dev/aegis/internal/settings"
 	"github.com/aegis-dev/aegis/internal/triage"
+	"github.com/aegis-dev/aegis/internal/tui"
 )
 
 //go:embed prompts/prover-v1.txt
@@ -177,7 +178,7 @@ func runConsole(ctx context.Context, in io.Reader, out io.Writer) error {
 		return err
 	}
 	settingsPath := filepath.Join(filepath.Dir(credentialPath), "settings.toml")
-	return console.Run(console.Deps{
+	deps := console.Deps{
 		Context: ctx, In: in, Out: out, UserConfigPath: settingsPath, CredentialsPath: credentialPath,
 		Keyring: credentials.NewOSKeyring(), ReadSecret: readSecret,
 		Doctor: func(checkCtx context.Context) []doctor.Check {
@@ -188,7 +189,15 @@ func runConsole(ctx context.Context, in io.Reader, out io.Writer) error {
 			return doctor.Run(checkCtx, options)
 		},
 		RunCommand: runInteractiveCommand,
-	})
+	}
+	// 真實終端機（stdin/stdout 皆為 tty）進對話式 TUI；管道／CI／測試自動退回
+	// 純文字 REPL，維持既有腳本與單元測試行為不變（§23：stdlib-only 測試路徑）。
+	if f, ok := out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if sf, ok := in.(*os.File); ok && term.IsTerminal(int(sf.Fd())) {
+			return tui.Run(deps)
+		}
+	}
+	return console.Run(deps)
 }
 
 // runInteractiveCommand 使用全新的 command tree 執行一次 pipeline，確保每次

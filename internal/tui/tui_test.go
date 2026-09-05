@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/settings"
 )
 
@@ -130,6 +132,30 @@ func TestAddWatchFlagForInteractiveAICommands(t *testing.T) {
 		if got := addWatchFlag(input); got != want {
 			t.Errorf("addWatchFlag(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestNativeBuildApprovalUsesArrowKeysAndEnter(t *testing.T) {
+	m := &model{
+		ti: textinput.New(), w: 100,
+		approvalResp: make(chan approval.Decision, 1),
+		approvalReq:  make(chan approval.BuildRequest, 1),
+	}
+	req := approval.BuildRequest{Pack: "go-web", Image: "golang@sha256:test", BuildDir: "/packs/go-web", Network: "pinned", RunNetwork: "none"}
+	updated, _ := m.Update(approvalMsg(req))
+	m = updated.(*model)
+	if m.approval == nil || !strings.Contains(m.approvalView(), "golang@sha256:test") {
+		t.Fatal("approval modal was not rendered")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(*model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(*model)
+	if m.approval != nil {
+		t.Fatal("approval modal remained open after Enter")
+	}
+	if got := <-m.approvalResp; got != approval.AllowRun {
+		t.Fatalf("decision=%v, want AllowRun", got)
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// §22 M0a：schemas/ 11 個檔案存在且相互驗證通過（contracts tests 另在 tests/，
+// §22 M0a：§21.1 schemas 全部存在且相互驗證通過（contracts tests 另在 tests/，
 // 此處驗 registry 行為本身）。
 
 func TestLoadDirAndValidate(t *testing.T) {
@@ -17,10 +17,11 @@ func TestLoadDirAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 11 個 schema 齊備（§21.1）
+	// §21.1 所列 schema 齊備。
 	want := []string{
 		"inventory", "candidate", "finding", "witness_spec", "run_request",
 		"run_result", "evidence", "triage", "journal_event", "pack_manifest", "settings",
+		"tools", "environment",
 	}
 	for _, n := range want {
 		if _, err := os.Stat(filepath.Join(dir, n+".schema.json")); err != nil {

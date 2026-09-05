@@ -177,6 +177,7 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 	b.WriteString("## 執行摘要\n\n")
 	fmt.Fprintf(&b, "- Finding 總數：%d（PROVEN %d；尚無機械 proof 支援 %d）\n\n", len(findings), len(proven), unsupported)
 	writeCoverage(&b, runDir)
+	writeEnvironment(&b, runDir)
 	if len(findings) == 0 {
 		b.WriteString("> 本次沒有候選 finding。這只表示已載入的 pack 與實際執行的 detector／reviewer 在其覆蓋範圍內未命中；不代表已完成全語言、全漏洞類別的 SAST、DAST、合規掃描，也不構成「系統安全」結論。\n\n")
 	}
@@ -198,6 +199,9 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 	if _, err := os.Stat(filepath.Join(dir, "coverage.json")); err == nil {
 		b.WriteString("- `coverage.json`（實際 pack／detector／語言覆蓋範圍）\n")
 	}
+	if _, err := os.Stat(filepath.Join(dir, "environment.json")); err == nil {
+		b.WriteString("- `environment.json`（proof runtime image 與 snapshot compile smoke check）\n")
+	}
 	b.WriteString("- `findings.json`（機讀全量）\n- `findings.sarif`（IDE/CI 整合）\n")
 	if _, err := os.Stat(filepath.Join(dir, "ai-events.jsonl")); err == nil {
 		b.WriteString("- `ai-events.jsonl`（AI 階段、可見回覆與工具活動）\n")
@@ -217,6 +221,23 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 		return "", fmt.Errorf("reporting: write report.md: %w", err)
 	}
 	return path, nil
+}
+
+func writeEnvironment(b *strings.Builder, runDir string) {
+	data, err := os.ReadFile(filepath.Join(runDir, "environment.json"))
+	if err != nil {
+		return
+	}
+	var env map[string]any
+	if json.Unmarshal(data, &env) != nil {
+		return
+	}
+	b.WriteString("## 環境準備\n\n")
+	fmt.Fprintf(b, "- 狀態：`%s`\n- Runtime：`%s`\n- Image：`%s`\n- 檢查：`%s`\n- Run 網路：`%s`\n\n", str(env["status"]), str(env["runtime"]), str(env["image"]), str(env["check"]), str(env["network"]))
+	if detail := str(env["detail"]); detail != "" {
+		fmt.Fprintf(b, "- 詳細：%s\n\n", detail)
+	}
+	b.WriteString("> `SOURCE_COMPILED` 只證明 immutable snapshot 在固定 runtime 通過 compile smoke check；不代表應用成功啟動，也不代表任何 finding 已可利用。\n\n")
 }
 
 func writeCoverage(b *strings.Builder, runDir string) {

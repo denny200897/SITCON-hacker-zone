@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/llm"
 	"github.com/aegis-dev/aegis/internal/packs"
 	"github.com/aegis-dev/aegis/internal/settings"
@@ -276,6 +277,26 @@ func TestPackCheckBuildTimeoutApplied(t *testing.T) {
 	}
 	if got < 6*time.Second || got > 8*time.Second {
 		t.Errorf("build deadline = %v, want ~7s", got)
+	}
+}
+
+func TestPackBuildRequiresApprovalWhenCallbackConfigured(t *testing.T) {
+	ref := "aegis-python-web@sha256:" + digest64
+	builds := packSeams(t, packWithImage(ref), nil, false, []string{ref})
+	called := 0
+	checks := Run(context.Background(), Options{
+		PackDirs: []string{"/packs/python-web"},
+		ApproveBuild: func(req approval.BuildRequest) (approval.Decision, error) {
+			called++
+			if req.Image != ref || req.RunNetwork != "none" {
+				t.Fatalf("request = %+v", req)
+			}
+			return approval.Deny, nil
+		},
+	})
+	c := findCheck(t, checks, "pack:python-web")
+	if c.OK || called != 1 || *builds != 0 || !strings.Contains(c.Detail, "未核准") {
+		t.Fatalf("check=%+v called=%d builds=%d", c, called, *builds)
 	}
 }
 

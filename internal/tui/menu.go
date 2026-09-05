@@ -439,6 +439,8 @@ var (
 // the always-visible input box and a hint line.
 func (m *model) controlBlock() string {
 	switch {
+	case m.approval != nil:
+		return m.approvalView()
 	case m.wizard != nil:
 		return m.wizardView()
 	case m.inSecret:

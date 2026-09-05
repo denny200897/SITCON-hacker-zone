@@ -20,6 +20,7 @@ import (
 
 	aegisassets "github.com/aegis-dev/aegis"
 	"github.com/aegis-dev/aegis/internal/agent"
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/candidates"
 	"github.com/aegis-dev/aegis/internal/console"
 	"github.com/aegis-dev/aegis/internal/credentials"
@@ -65,7 +66,7 @@ func newRoot() *cobra.Command {
 // 除錯與斷點續跑，但不要求操作者手動搬運 run-dir 或逐段編排。
 func newReview() *cobra.Command {
 	var target, targetSubdir, runDir, packDir string
-	var watch bool
+	var watch, approveBuild bool
 	var hypotheses int
 	c := &cobra.Command{
 		Use:   "review [repo root]",
@@ -78,6 +79,7 @@ func newReview() *cobra.Command {
 	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack directory")
 	c.Flags().BoolVar(&watch, "watch", false, "show the AI workflow, response summaries, and tool activity")
 	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "override the hypothesis limit")
+	c.Flags().BoolVar(&approveBuild, "approve-build", false, "preapprove proof image builds required by this review (for CI)")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
 			if cmd.Flags().Changed("target") {
@@ -112,11 +114,11 @@ func newReview() *cobra.Command {
 		if watch {
 			scanArgs = append(scanArgs, "--watch")
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\n[1/4] SCAN — snapshot, inventory, detectors, and AI review")
+		fmt.Fprintln(cmd.OutOrStdout(), "\n[1/5] SCAN — snapshot, inventory, detectors, and AI review")
 		if err := run(scanArgs...); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "✓ [1/4] SCAN complete")
+		fmt.Fprintln(cmd.OutOrStdout(), "✓ [1/5] SCAN complete")
 
 		data, err := os.ReadFile(filepath.Join(runDir, "findings.json"))
 		if err != nil {
@@ -126,15 +128,30 @@ func newReview() *cobra.Command {
 		if err := decodeJSON(data, &findings); err != nil {
 			return stageError("review", err)
 		}
+		environmentReady := true
+		var verificationErr error
+		fmt.Fprintln(cmd.OutOrStdout(), "\n[2/5] ENVIRONMENT — preparing an approved, pinned runtime")
+		if len(findings) > 0 {
+			if envErr := prepareRunEnvironment(cmd, runDir, packDir, findings, approveBuild); envErr != nil {
+				environmentReady = false
+				verificationErr = envErr
+				fmt.Fprintf(cmd.OutOrStdout(), "○ [2/5] ENVIRONMENT not ready — %v\n", envErr)
+			} else if _, statErr := os.Stat(filepath.Join(runDir, "environment.json")); statErr == nil {
+				fmt.Fprintln(cmd.OutOrStdout(), "✓ [2/5] ENVIRONMENT ready — isolated source compile check passed")
+			} else {
+				fmt.Fprintln(cmd.OutOrStdout(), "○ [2/5] ENVIRONMENT skipped — no supported source-runtime check")
+			}
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [2/5] ENVIRONMENT skipped — no candidate findings")
+		}
 		supportedCount := 0
 		for _, finding := range findings {
 			if proofSupported(finding) {
 				supportedCount++
 			}
 		}
-		var verificationErr error
-		if supportedCount > 0 {
-			fmt.Fprintf(cmd.OutOrStdout(), "\n[2/4] PROVE — validating %d supported finding(s)\n", supportedCount)
+		if supportedCount > 0 && environmentReady {
+			fmt.Fprintf(cmd.OutOrStdout(), "\n[3/5] PROVE — validating %d oracle-supported finding(s)\n", supportedCount)
 			proveArgs := []string{"prove", "--target", target, "--run-dir", runDir, "--pack", packDir}
 			if targetSubdir != "" {
 				proveArgs = append(proveArgs, "--target-subdir", targetSubdir)
@@ -145,29 +162,35 @@ func newReview() *cobra.Command {
 			if hypotheses > 0 {
 				proveArgs = append(proveArgs, "--hypotheses", fmt.Sprint(hypotheses))
 			}
+			if approveBuild {
+				proveArgs = append(proveArgs, "--approve-build")
+			}
 			if err := run(proveArgs...); err != nil {
 				verificationErr = err
 			} else {
-				fmt.Fprintln(cmd.OutOrStdout(), "✓ [2/4] PROVE complete")
+				fmt.Fprintln(cmd.OutOrStdout(), "✓ [3/5] PROVE complete")
 				if _, err := os.Stat(filepath.Join(runDir, "evidence")); err == nil {
-					fmt.Fprintln(cmd.OutOrStdout(), "\n[3/4] REPLAY — independently checking evidence")
+					fmt.Fprintln(cmd.OutOrStdout(), "\n[4/5] REPLAY — independently checking evidence")
 					if err := run("replay", "--target", scanRoot, "--run-dir", runDir, "--pack", packDir); err != nil {
 						verificationErr = err
 					} else {
-						fmt.Fprintln(cmd.OutOrStdout(), "✓ [3/4] REPLAY complete")
+						fmt.Fprintln(cmd.OutOrStdout(), "✓ [4/5] REPLAY complete")
 					}
 				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "○ [3/4] REPLAY skipped — no evidence bundle")
+					fmt.Fprintln(cmd.OutOrStdout(), "○ [4/5] REPLAY skipped — no evidence bundle")
 				}
 			}
+		} else if !environmentReady {
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [3/5] PROVE skipped — proof environment was not approved or failed validation")
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [4/5] REPLAY skipped — no evidence bundle")
 		} else if len(findings) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "○ [2/4] PROVE skipped — no candidate findings")
-			fmt.Fprintln(cmd.OutOrStdout(), "○ [3/4] REPLAY skipped — no evidence bundle")
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [3/5] PROVE skipped — no candidate findings")
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [4/5] REPLAY skipped — no evidence bundle")
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "○ [2/4] PROVE skipped — %d finding(s), but no matching proof runtime\n", len(findings))
-			fmt.Fprintln(cmd.OutOrStdout(), "○ [3/4] REPLAY skipped — no evidence bundle")
+			fmt.Fprintf(cmd.OutOrStdout(), "○ [3/5] PROVE skipped — %d finding(s), but no matching trusted oracle\n", len(findings))
+			fmt.Fprintln(cmd.OutOrStdout(), "○ [4/5] REPLAY skipped — no evidence bundle")
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\n[4/4] REPORT — generating final security report")
+		fmt.Fprintln(cmd.OutOrStdout(), "\n[5/5] REPORT — generating final security report")
 		reportArgs := []string{"report", "--target", scanRoot, "--run-dir", runDir}
 		if watch {
 			reportArgs = append(reportArgs, "--watch")
@@ -175,7 +198,7 @@ func newReview() *cobra.Command {
 		if err := run(reportArgs...); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "✓ [4/4] REPORT complete")
+		fmt.Fprintln(cmd.OutOrStdout(), "✓ [5/5] REPORT complete")
 		if verificationErr != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "\n✗ REVIEW INCOMPLETE — report generated, but verification failed\n  artifacts: %s\n", runDir)
 			return verificationErr
@@ -298,7 +321,7 @@ func newStage(name, short string) *cobra.Command {
 	var runDir string
 	var specPath, packDir string
 	var dispositions []string
-	var watch bool
+	var watch, approveBuild bool
 	var hypotheses int
 	c := &cobra.Command{Use: name, Short: short, Args: cobra.ArbitraryArgs}
 	c.Flags().StringVar(&target, "target", ".", "repo root")
@@ -315,6 +338,7 @@ func newStage(name, short string) *cobra.Command {
 	if name == "prove" {
 		c.Flags().StringVar(&specPath, "spec", "", "WitnessSpec JSON")
 		c.Flags().IntVar(&hypotheses, "hypotheses", 0, "override the hypothesis limit (defaults to [budget], or 3 if unset)")
+		c.Flags().BoolVar(&approveBuild, "approve-build", false, "preapprove the proof image build (for CI)")
 	}
 	if name == "report" {
 		c.Flags().StringArrayVar(&dispositions, "set-disposition", nil, "set a finding disposition (F-####=OPEN|FALSE_POSITIVE|ACCEPTED_RISK|FIXED)")
@@ -642,7 +666,11 @@ func newStage(name, short string) *cobra.Command {
 				}
 				fmt.Fprintln(cmd.OutOrStdout(), "LLM reporter finished writing")
 			}
-			if _, err := j.Append("report_written", "", map[string]any{"artifacts": []string{"findings.json", "findings.sarif", "report.md"}}); err != nil {
+			artifacts := []string{"findings.json", "findings.sarif", "report.md"}
+			if _, statErr := os.Stat(filepath.Join(runDir, "environment.json")); statErr == nil {
+				artifacts = append(artifacts, "environment.json")
+			}
+			if _, err := j.Append("report_written", "", map[string]any{"artifacts": artifacts}); err != nil {
 				return stageError(name, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "report complete: %s\n", path)
@@ -675,7 +703,7 @@ func newStage(name, short string) *cobra.Command {
 		}
 		if name == "prove" {
 			return runProveCommand(cmd, args, proveOptions{target: target, targetSubdir: targetSubdir,
-				runDir: runDir, specPath: specPath, packDir: packDir, watch: watch, hypotheses: hypotheses})
+				runDir: runDir, specPath: specPath, packDir: packDir, watch: watch, hypotheses: hypotheses, approveBuild: approveBuild})
 		}
 		_ = args
 		_ = watch
@@ -687,7 +715,7 @@ func newStage(name, short string) *cobra.Command {
 
 type proveOptions struct {
 	target, targetSubdir, runDir, specPath, packDir string
-	watch                                           bool
+	watch, approveBuild                             bool
 	hypotheses                                      int
 }
 
@@ -741,6 +769,9 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	}
 	var findings []reporting.Finding
 	if err := decodeJSON(findingsData, &findings); err != nil {
+		return stageError("prove", err)
+	}
+	if err := prepareRunEnvironment(cmd, opts.runDir, opts.packDir, findings, opts.approveBuild); err != nil {
 		return stageError("prove", err)
 	}
 	selected := make([]reporting.Finding, 0, len(findings))
@@ -954,6 +985,178 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "artifacts: %s\n", opts.runDir)
 	return nil
+}
+
+type environmentRecord struct {
+	SnapshotID string `json:"snapshot_id"`
+	Pack       string `json:"pack"`
+	Runtime    string `json:"runtime"`
+	Image      string `json:"image,omitempty"`
+	Status     string `json:"status"`
+	Check      string `json:"check"`
+	Network    string `json:"network"`
+	Detail     string `json:"detail,omitempty"`
+}
+
+var (
+	preparePacksForRun     = doctor.PreparePacks
+	checkEnvironmentForRun = func(ctx context.Context, spec sandbox.EnvironmentCheckSpec) ([]byte, error) {
+		return (&sandbox.Runner{}).CheckEnvironment(ctx, spec)
+	}
+)
+
+// prepareRunEnvironment is intentionally independent from vulnerability oracle
+// support. A Python finding can therefore establish that its immutable source
+// compiles in the pinned runtime even when its vulnerability family remains
+// NOT_RUN because no trusted oracle exists yet.
+func prepareRunEnvironment(cmd *cobra.Command, runDir, packDir string, findings []reporting.Finding, preapproved bool) error {
+	var snapshotID string
+	pythonApplicable := false
+	for _, finding := range findings {
+		if snapshotID == "" {
+			snapshotID = stringValue(finding["snapshot_id"])
+		}
+		if strings.EqualFold(filepath.Ext(stringValue(mapValue(finding["sink"])["file"])), ".py") {
+			pythonApplicable = true
+		}
+	}
+	if !pythonApplicable || snapshotID == "" {
+		return nil
+	}
+	environmentPath := filepath.Join(runDir, "environment.json")
+	if data, err := os.ReadFile(environmentPath); err == nil {
+		var existing environmentRecord
+		if decodeJSON(data, &existing) == nil && existing.SnapshotID == snapshotID && existing.Status == "SOURCE_COMPILED" {
+			return nil
+		}
+	}
+	cacheDir, err := aegisCacheDir()
+	if err != nil {
+		return err
+	}
+	packDir, err = resolvePackDir(packDir, cacheDir)
+	if err != nil {
+		return err
+	}
+	pack, err := loadPackForCLI(packDir)
+	if err != nil {
+		return err
+	}
+	if pack.Manifest.PackID != "python-web" {
+		return nil
+	}
+	schemasDir, err := projectSchemasDir()
+	if err != nil {
+		return err
+	}
+	imageCache := filepath.Join(cacheDir, "images.json")
+	checks := preparePacksForRun(cmd.Context(), doctor.Options{
+		PackDirs: []string{packDir}, SchemasDir: schemasDir, CachePath: imageCache,
+		ApproveBuild: commandBuildApprover(cmd, preapproved),
+	})
+	for _, check := range checks {
+		if !check.OK {
+			record := environmentRecord{SnapshotID: snapshotID, Pack: pack.Manifest.PackID + "@" + pack.Manifest.Version, Runtime: "python", Status: "NOT_READY", Check: "Python compile() over /target/**/*.py", Network: "none", Detail: check.Detail}
+			if writeErr := writeEnvironmentRecord(environmentPath, record); writeErr != nil {
+				return fmt.Errorf("proof environment preparation failed (%s): %s; could not record environment status: %v", check.Name, check.Detail, writeErr)
+			}
+			return fmt.Errorf("proof 環境準備失敗（%s）：%s", check.Name, check.Detail)
+		}
+	}
+	if len(pack.Manifest.Templates) == 0 {
+		return errors.New("python-web pack 沒有 runtime template")
+	}
+	templateID := ""
+	for _, candidate := range pack.Manifest.Templates {
+		for _, ext := range candidate.AllowedFiles {
+			if strings.EqualFold(ext, ".py") {
+				templateID = candidate.TemplateID
+				break
+			}
+		}
+		if templateID != "" {
+			break
+		}
+	}
+	if templateID == "" {
+		return errors.New("python-web pack 沒有允許 Python 檔案的 runtime template")
+	}
+	tmpl, err := orchestrator.NewPackView(pack, imageCache).Template(templateID)
+	if err != nil {
+		return err
+	}
+	snapshotDir := filepath.Join(cacheDir, "snapshots", snapshotID)
+	j, err := journal.Open(filepath.Join(runDir, "journal.sqlite"))
+	if err != nil {
+		return err
+	}
+	events, eventsErr := j.Events()
+	closeErr := j.Close()
+	if eventsErr != nil {
+		return eventsErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	treeHash := snapshotTreeHash(events, snapshotID)
+	if treeHash == "" {
+		return fmt.Errorf("journal 缺少 snapshot %s 的 tree hash", snapshotID)
+	}
+	if err := snapshot.Verify(snapshotDir, snapshotID, treeHash); err != nil {
+		return err
+	}
+	const pythonCompileCheck = "import pathlib\nfor p in pathlib.Path('/target').rglob('*.py'):\n compile(p.read_bytes(), str(p), 'exec')"
+	_, err = checkEnvironmentForRun(cmd.Context(), sandbox.EnvironmentCheckSpec{
+		RunID: "ENV-CHECK", SnapshotID: snapshotID, SnapshotDir: snapshotDir,
+		Image: tmpl.Image, Seccomp: filepath.Join(packDir, "sandbox", "seccomp.json"),
+		Cmd: []string{"python", "-c", pythonCompileCheck}, TimeoutSec: 120,
+	})
+	record := environmentRecord{SnapshotID: snapshotID, Pack: pack.Manifest.PackID + "@" + pack.Manifest.Version, Runtime: "python", Image: tmpl.Image, Check: "Python compile() over /target/**/*.py", Network: "none"}
+	if err != nil {
+		record.Status, record.Detail = "COMPILE_FAILED", err.Error()
+		_ = writeEnvironmentRecord(environmentPath, record)
+		return fmt.Errorf("Python snapshot compile check 失敗：%w", err)
+	}
+	record.Status = "SOURCE_COMPILED"
+	return writeEnvironmentRecord(environmentPath, record)
+}
+
+func writeEnvironmentRecord(path string, record environmentRecord) error {
+	if err := validateSchema("environment", record); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return redaction.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func commandBuildApprover(cmd *cobra.Command, preapproved bool) approval.Approver {
+	allowAll := preapproved
+	inherited := approval.FromContext(cmd.Context())
+	return func(req approval.BuildRequest) (approval.Decision, error) {
+		if allowAll {
+			return approval.AllowRun, nil
+		}
+		if inherited != nil {
+			decision, err := inherited(req)
+			if decision == approval.AllowRun {
+				allowAll = true
+			}
+			return decision, err
+		}
+		inFile, inOK := cmd.InOrStdin().(*os.File)
+		outFile, outOK := cmd.OutOrStdout().(*os.File)
+		if !inOK || !outOK || !term.IsTerminal(int(inFile.Fd())) || !term.IsTerminal(int(outFile.Fd())) {
+			return approval.Deny, errors.New("非互動環境不會自動建立 image；請加 --approve-build 明確核准")
+		}
+		decision, err := approval.Prompt(inFile, outFile, req)
+		if decision == approval.AllowRun {
+			allowAll = true
+		}
+		return decision, err
+	}
 }
 
 func proofSupported(finding reporting.Finding) bool {

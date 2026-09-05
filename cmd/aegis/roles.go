@@ -70,25 +70,32 @@ type reviewCandidate struct {
 }
 
 func decodeReviewCandidates(text string) ([]reviewCandidate, error) {
-	payload := []byte(jsonPayload(text))
-	var direct []reviewCandidate
-	if err := json.Unmarshal(payload, &direct); err == nil {
-		return direct, nil
+	var lastErr error
+	for _, payload := range reviewJSONPayloads(text) {
+		var direct []reviewCandidate
+		if err := json.Unmarshal([]byte(payload), &direct); err == nil {
+			return direct, nil
+		}
+		var wrapped struct {
+			Candidates []reviewCandidate `json:"candidates"`
+			Findings   []reviewCandidate `json:"findings"`
+		}
+		if err := json.Unmarshal([]byte(payload), &wrapped); err != nil {
+			lastErr = err
+			continue
+		}
+		if wrapped.Candidates != nil {
+			return wrapped.Candidates, nil
+		}
+		if wrapped.Findings != nil {
+			return wrapped.Findings, nil
+		}
+		lastErr = errors.New("回應必須是 JSON array 或包含 candidates/findings array 的物件")
 	}
-	var wrapped struct {
-		Candidates []reviewCandidate `json:"candidates"`
-		Findings   []reviewCandidate `json:"findings"`
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	if err := json.Unmarshal(payload, &wrapped); err != nil {
-		return nil, err
-	}
-	if wrapped.Candidates != nil {
-		return wrapped.Candidates, nil
-	}
-	if wrapped.Findings != nil {
-		return wrapped.Findings, nil
-	}
-	return nil, errors.New("response must be a JSON array or an object containing a candidates/findings array")
+	return nil, errors.New("response does not contain a complete JSON array/object")
 }
 
 func adapterForRole(repoRoot, role string) (llm.Adapter, string, error) {
@@ -182,15 +189,34 @@ func roleText(ctx context.Context, adapter llm.Adapter, role llm.Role, model, sy
 	return b.String(), nil
 }
 
-func jsonPayload(text string) string {
+// reviewJSONPayloads returns the raw response first, followed by every complete
+// JSON array/object embedded in it. Reviewers are instructed to return JSON
+// only, but some compatible models prepend a public summary or emit an inline
+// ```json fence. A decoder-based extraction handles both without trying to
+// repair or invent model output.
+func reviewJSONPayloads(text string) []string {
 	text = strings.TrimSpace(text)
-	if strings.HasPrefix(text, "```") {
-		if i := strings.Index(text, "\n"); i >= 0 {
-			text = text[i+1:]
-		}
-		text = strings.TrimSuffix(strings.TrimSpace(text), "```")
+	if text == "" {
+		return nil
 	}
-	return strings.TrimSpace(text)
+	payloads := []string{text}
+	seen := map[string]bool{text: true}
+	for i := 0; i < len(text); i++ {
+		if text[i] != '{' && text[i] != '[' {
+			continue
+		}
+		dec := json.NewDecoder(strings.NewReader(text[i:]))
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			continue
+		}
+		payload := strings.TrimSpace(string(raw))
+		if payload != "" && !seen[payload] {
+			seen[payload] = true
+			payloads = append(payloads, payload)
+		}
+	}
+	return payloads
 }
 
 func reviewableContent(file inventory.File, data []byte) bool {
@@ -508,9 +534,13 @@ func writeLLMReport(ctx context.Context, repoRoot, runDir string, findings []rep
 	if coverageErr != nil {
 		coverage = []byte(`{"coverage":"unknown"}`)
 	}
+	environment, environmentErr := os.ReadFile(filepath.Join(runDir, "environment.json"))
+	if environmentErr != nil {
+		environment = []byte(`{"status":"NOT_RUN","detail":"environment preparation was not executed"}`)
+	}
 	text, err := roleText(withAIPhase(ctx, "report"), adapter, llm.RoleReporter, model,
-		"You are a security report writer. Never change a finding's status, severity, or evidence; never claim an unverified item was proven; never claim to have run SAST, DAST, penetration testing, compliance scans, or architecture reviews not stated in the input; never invent dates, system scope, standards, tools, or electronic artifacts.",
-		"Using only the coverage JSON and findings JSON, produce a Markdown report in English containing an executive summary, actual coverage, per-item evidence, verification status, remediation guidance, and the electronic artifacts that actually exist. Where any method or scope is unknown, state unknown explicitly; do not pad with generic template content.\ncoverage JSON:\n"+string(coverage)+"\nfindings JSON:\n"+string(data), "medium")
+		"You are a security report writer. Never change a finding's status, severity, or evidence; never claim an unverified item was proven. environment status SOURCE_COMPILED means only that the immutable snapshot passed a compile smoke check in a pinned runtime; it does not mean the application started or a vulnerability is exploitable. Never claim to have run SAST, DAST, penetration testing, compliance scans, or architecture reviews not stated in the input; never invent dates, system scope, standards, tools, or electronic artifacts.",
+		"Using only the coverage, environment, and findings JSON, produce a Markdown report in English containing an executive summary, actual coverage, environment preparation results, per-item evidence, verification status, remediation guidance, and the electronic artifacts that actually exist. Where any method or scope is unknown, state unknown explicitly; do not pad with generic template content.\ncoverage JSON:\n"+string(coverage)+"\nenvironment JSON:\n"+string(environment)+"\nfindings JSON:\n"+string(data), "medium")
 	if err != nil {
 		return "", err
 	}

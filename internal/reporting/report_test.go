@@ -3,6 +3,7 @@ package reporting
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,27 @@ func TestWriteReportMDKeepsUnsupportedReviewFinding(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	text := string(data)
 	for _, want := range []string{"尚未機械實證", "Go race oracle 尚未提供", "CWE-362", "main.go:73", "尚無機械 proof 支援 1"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestWriteReportMDSeparatesEnvironmentCompileFromProof(t *testing.T) {
+	dir := t.TempDir()
+	env := `{"snapshot_id":"SN-aaaaaaaaaaaa","pack":"python-web@1.0.0","runtime":"python","image":"python@sha256:abc","status":"SOURCE_COMPILED","check":"python -m compileall -q /target","network":"none"}`
+	if err := os.WriteFile(filepath.Join(dir, "environment.json"), []byte(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finding := sampleFinding("F-0008", "NOT_RUN", "D0")
+	finding["proof_supported"] = false
+	path, err := WriteReportMD(dir, []Finding{finding}, dir, testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	text := string(data)
+	for _, want := range []string{"環境準備", "SOURCE_COMPILED", "不代表應用成功啟動", "environment.json"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("report missing %q:\n%s", want, text)
 		}

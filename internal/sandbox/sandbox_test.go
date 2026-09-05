@@ -25,6 +25,31 @@ func requireDocker(t *testing.T) *Runner {
 	return r
 }
 
+func TestEnvironmentCheckIsReadOnlyAndNetworkless(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker-fake")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := (&Runner{Bin: bin}).CheckEnvironment(context.Background(), EnvironmentCheckSpec{
+		RunID: "ENV-CHECK", SnapshotID: "SN-aaaaaaaaaaaa", SnapshotDir: dir,
+		Image: "python@sha256:" + strings.Repeat("a", 64), Seccomp: filepath.Join(dir, "seccomp.json"),
+		Cmd: []string{"python", "-c", "compile(source, path, 'exec')"}, TimeoutSec: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := string(out)
+	for _, want := range []string{"--read-only", "--network\nnone", "readonly", "python\n-c\ncompile("} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("environment args missing %q:\n%s", want, args)
+		}
+	}
+	if strings.Contains(args, "--publish") || strings.Contains(args, "-p\n") {
+		t.Fatalf("environment check published a port:\n%s", args)
+	}
+}
+
 // TestCreateRejectsUnknownDigest covers the adversarial case that a reference
 // is syntactically a digest but does not identify an image available to the
 // daemon.  A valid-looking digest must never be silently replaced by a tag or

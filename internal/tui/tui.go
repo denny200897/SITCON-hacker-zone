@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/console"
 	"github.com/aegis-dev/aegis/internal/settings"
 )
@@ -31,6 +33,7 @@ type (
 	outputMsg     string
 	doneMsg       error
 	secretMsg     string
+	approvalMsg   approval.BuildRequest
 	copyResultMsg struct{ err error }
 )
 
@@ -40,17 +43,21 @@ type model struct {
 	ready bool
 	w, h  int
 
-	transcript strings.Builder
-	pipeW      *io.PipeWriter
-	outCh      chan string
-	doneCh     chan error
-	secretReq  chan string
-	secretResp chan string
+	transcript   strings.Builder
+	pipeW        *io.PipeWriter
+	outCh        chan string
+	doneCh       chan error
+	secretReq    chan string
+	secretResp   chan string
+	approvalReq  chan approval.BuildRequest
+	approvalResp chan approval.Decision
 
-	settingsPath string
-	lang         language
-	inSecret     bool
-	exiting      bool
+	settingsPath   string
+	lang           language
+	inSecret       bool
+	approval       *approval.BuildRequest
+	approvalCursor int
+	exiting        bool
 
 	menu   *menuNode // the action menu shown at the bottom
 	wizard *wizard   // active guided prompt, or nil
@@ -65,6 +72,7 @@ func newModel(deps console.Deps) *model {
 	m := &model{
 		pipeW: writer, outCh: make(chan string, 64), doneCh: make(chan error, 1),
 		secretReq: make(chan string, 1), secretResp: make(chan string, 1),
+		approvalReq: make(chan approval.BuildRequest, 1), approvalResp: make(chan approval.Decision, 1),
 		settingsPath: deps.UserConfigPath, lang: lang,
 	}
 	deps.In = reader
@@ -72,6 +80,10 @@ func newModel(deps console.Deps) *model {
 	deps.ReadSecret = func(prompt string) ([]byte, error) {
 		m.secretReq <- prompt
 		return []byte(<-m.secretResp), nil
+	}
+	deps.ApproveBuild = func(req approval.BuildRequest) (approval.Decision, error) {
+		m.approvalReq <- req
+		return <-m.approvalResp, nil
 	}
 	if deps.Context == nil {
 		deps.Context = context.Background()
@@ -94,12 +106,13 @@ func newModel(deps console.Deps) *model {
 }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.waitOutput(), m.waitDone(), m.waitSecret(), textinput.Blink)
+	return tea.Batch(m.waitOutput(), m.waitDone(), m.waitSecret(), m.waitApproval(), textinput.Blink)
 }
 
-func (m *model) waitOutput() tea.Cmd { return func() tea.Msg { return outputMsg(<-m.outCh) } }
-func (m *model) waitDone() tea.Cmd   { return func() tea.Msg { return doneMsg(<-m.doneCh) } }
-func (m *model) waitSecret() tea.Cmd { return func() tea.Msg { return secretMsg(<-m.secretReq) } }
+func (m *model) waitOutput() tea.Cmd   { return func() tea.Msg { return outputMsg(<-m.outCh) } }
+func (m *model) waitDone() tea.Cmd     { return func() tea.Msg { return doneMsg(<-m.doneCh) } }
+func (m *model) waitSecret() tea.Cmd   { return func() tea.Msg { return secretMsg(<-m.secretReq) } }
+func (m *model) waitApproval() tea.Cmd { return func() tea.Msg { return approvalMsg(<-m.approvalReq) } }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
@@ -112,6 +125,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp, command = m.vp.Update(msg)
 		commands = append(commands, command)
 	case tea.KeyMsg:
+		if m.approval != nil {
+			return m.updateApproval(msg)
+		}
 		if msg.String() == "ctrl+c" || msg.String() == "ctrl+d" {
 			m.exiting = true
 			_ = m.pipeW.Close()
@@ -169,6 +185,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ti.Placeholder = string(msg)
 		m.resize()
 		commands = append(commands, m.waitSecret())
+	case approvalMsg:
+		req := approval.BuildRequest(msg)
+		m.approval = &req
+		m.approvalCursor = 0
+		m.ti.Blur()
+		m.resize()
+		commands = append(commands, m.waitApproval())
 	case doneMsg:
 		if !m.exiting {
 			return m, tea.Quit
@@ -186,6 +209,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		commands = append(commands, command)
 	}
 	return m, tea.Batch(commands...)
+}
+
+func (m *model) updateApproval(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "ctrl+d":
+		m.approvalResp <- approval.Deny
+		m.exiting = true
+		_ = m.pipeW.Close()
+		return m, tea.Quit
+	case "up", "k":
+		m.approvalCursor = (m.approvalCursor + 2) % 3
+	case "down", "j", "tab":
+		m.approvalCursor = (m.approvalCursor + 1) % 3
+	case "esc":
+		return m.finishApproval(approval.Deny)
+	case "enter":
+		return m.finishApproval([]approval.Decision{approval.AllowOnce, approval.AllowRun, approval.Deny}[m.approvalCursor])
+	}
+	return m, nil
+}
+
+func (m *model) finishApproval(decision approval.Decision) (tea.Model, tea.Cmd) {
+	_, labels, _ := m.approvalText()
+	idx := map[approval.Decision]int{approval.AllowOnce: 0, approval.AllowRun: 1, approval.Deny: 2}[decision]
+	m.appendLine(promptStyle.Render("核准：") + labels[idx])
+	m.approval = nil
+	m.approvalCursor = 0
+	m.ti.Focus()
+	m.approvalResp <- decision
+	m.resize()
+	return m, textinput.Blink
 }
 
 func (m *model) submit() tea.Cmd {
@@ -512,6 +566,35 @@ func (m *model) View() string {
 		return lipgloss.PlaceHorizontal(m.w, lipgloss.Center, frame)
 	}
 	return frame
+}
+
+func (m *model) approvalView() string {
+	req := m.approval
+	title, choices, hint := m.approvalText()
+	lines := []string{
+		promptStyle.Render(title),
+		fmt.Sprintf("Pack: %s", req.Pack), fmt.Sprintf("Image: %s", req.Image),
+		fmt.Sprintf("Source: %s", req.BuildDir), fmt.Sprintf("Build network: %s", req.Network),
+		fmt.Sprintf("Run network: %s", req.RunNetwork), "",
+	}
+	for i, choice := range choices {
+		prefix := "  "
+		style := dimStyle
+		if i == m.approvalCursor {
+			prefix = "› "
+			style = promptStyle
+		}
+		lines = append(lines, style.Render(prefix+choice))
+	}
+	lines = append(lines, "", dimStyle.Render(hint))
+	return lipgloss.NewStyle().Width(m.contentWidth()).Render(strings.Join(lines, "\n"))
+}
+
+func (m *model) approvalText() (string, []string, string) {
+	if m.lang == languageChinese {
+		return "Aegis 需要建立驗證環境", []string{"允許這一次", "本次 review 全部允許", "拒絕"}, "↑/↓ 選擇 · Enter 確認 · Esc 拒絕"
+	}
+	return "Aegis needs to build a verification environment", []string{"Allow once", "Allow all for this review", "Deny"}, "↑/↓ choose · Enter confirm · Esc deny"
 }
 
 func (m *model) hintLine() string {

@@ -222,9 +222,9 @@ LLMAdapter.chat(role, messages, tools, output_schema?, thinking?, stream?) -> Re
 ## 4. 流水線（Pipeline）
 
 ```
-Stage 0        Stage 1             Stage 2          Stage 3                Stage 4
-Inventory ──▶ Candidates ──▶ Triage & ACD ──▶ MVP Synthesis & Proof ──▶ Report
-(haiku)       (semgrep+sonnet)  (sonnet)         (opus, prover loop)      (sonnet + 確定性元件)
+Stage 0        Stage 1             Stage 2       Stage 2.5          Stage 3                Stage 4
+Inventory ──▶ Candidates ──▶ Triage & ACD ──▶ Environment Prep ──▶ MVP Synthesis & Proof ──▶ Report
+(haiku)       (semgrep+sonnet)  (sonnet)         (確定性元件)        (opus, prover loop)      (sonnet + 確定性元件)
 ```
 
 ### Stage 0 — Inventory
@@ -240,6 +240,18 @@ Inventory ──▶ Candidates ──▶ Triage & ACD ──▶ MVP Synthesis & 
 - triager 對每個候選回答：sink 是否真實？攻擊鏈缺哪幾環？現有輸入面能否觸及？→ 定出距離 D0–D3 與模式（直攻／見證）。
 - 明顯誤報直接標 FALSE_POSITIVE（附理由），不浪費 prover 預算。
 - 輸出排好序的 `triage.json`。
+
+### Stage 2.5 — Environment Prep
+
+- 此階段獨立於漏洞家族是否已有 trusted oracle；例如 Python finding 即使尚無 CSRF
+  oracle，仍可先準備使用者核准且 digest-pinned 的 runtime image。
+- v1 對 Python immutable snapshot 執行唯讀、`--network none` 的 `compile()` smoke
+  check，結果寫入 `environment.json`。`SOURCE_COMPILED` 只代表原始碼可由該
+  runtime 編譯，不代表依賴已安裝、應用已啟動，亦不會把 finding 升級為 `PROVEN`。
+- image 尚未存在而需要 build 時，由 CLI/TUI 顯示核准選單；直接 Enter 僅允許當次，
+  非互動環境預設拒絕，除非明確傳入 `--approve-build`。
+- 後續語言須新增 core-owned runtime resolver 與固定 smoke/boot check，不接受 repo
+  或 LLM 提供任意 host command。
 
 ### Stage 3 — MVP Synthesis & Proof（核心創新，最難，先做）
 
@@ -662,7 +674,7 @@ aegis/
 │   ├── redaction/              # §7.2 patterns（單一真源）
 │   ├── reporting/
 │   └── cli/                    # cobra 子命令、stdin REPL
-├── schemas/                    # 11 個 *.schema.json（§21.1）
+├── schemas/                    # 機讀契約 *.schema.json（§21.1）
 ├── packs/python-web/           # 目標語言內容物——沙箱側 Python，與 harness 語言無關
 ├── tests/                      # 跨套件測試：contracts/adversarial/integration/e2e
 ├── fixtures/                   # vuln-sqli-001 等（沙箱側 Python）
@@ -835,8 +847,8 @@ Direct 模式仍走**同一 WitnessSpec 介面**：`template_id` 選 direct 系�
 
 ### 17.10 映像檔本地構建與 digest 記錄
 
-- v1 映像**一律本地構建**：`/doctor`（或首次 prove 前）以 pack 的 `image/Dockerfile` build，digest 寫入 `~/.cache/aegis/images.json`（鍵 = `<pack_id>@<pack_version>`，值 = image digest 與構建時間）。
-- policy compiler 解析序：pack manifest 記載的 digest → 本地 `images.json` → 兩者皆無 → `ENV_ERROR`，訊息提示先跑 `/doctor`；**不自動構建**（避免證明迴圈中途動環境）。
+- v1 映像**一律本地構建**：`/doctor`，或 `review`/`prove` 在進入證明迴圈前的核准 preflight，以 pack 的 `image/Dockerfile` build，digest 寫入 `~/.cache/aegis/images.json`（鍵 = `<pack_id>@<pack_version>`，值 = image digest 與構建時間）。互動環境必須顯示 image、build 來源與網路政策並由使用者核准；非 TTY 只接受顯式 `--approve-build`。
+- policy compiler 解析序：pack manifest 記載的 digest → 本地 `images.json` → 兩者皆無 → `ENV_ERROR`；policy compiler 與模型證明迴圈**不得自動構建**，所有 build 只能發生在上述人類核准的 preflight。
 - 映像內建：nonroot user 65532、`/aegis` 目錄結構、wheelhouse、`/aegis/out` 由 entrypoint `chown` 給 65532。
 
 ---
@@ -959,7 +971,7 @@ verification=PROVEN **不升級 severity**（severity 是「如果接通會怎�
 
 ### 21.1 schemas/ 清單（M0a 全部落地，draft 2020-12）
 
-`inventory`、`candidate`、`finding`、`witness_spec`、`run_request`、`run_result`、`evidence`、`triage`、`journal_event`、`pack_manifest`、`settings`（各一個 `*.schema.json`）。**機讀真源是這些檔案**，spec 內的 JSONC 只是帶註解示意。
+`inventory`、`candidate`、`finding`、`witness_spec`、`run_request`、`run_result`、`evidence`、`triage`、`journal_event`、`pack_manifest`、`settings`、`tools`、`environment`（各一個 `*.schema.json`）。**機讀真源是這些檔案**，spec 內的 JSONC 只是帶註解示意。
 
 ### 21.2 ID 規則（journal 統一分配，不得各處自取）
 
@@ -999,7 +1011,7 @@ func canonical(v any) ([]byte, error) {
 - [x] 手寫 WitnessSpec ＋固定 fixture 能走完：policy compiler → sandbox build/run → checker → evidence 落檔（全程無 LLM 呼叫）。
 - [x] hardening 每條 flag 有 unit test（`docker inspect` 驗證 cap_drop／ro rootfs／no-new-privileges／non-root 生效）。
 - [x] adversarial tests：digest 不符映像、可變 tag、`..` 路徑、絕對路徑 generated_files、超大 generated_files（>256KiB）各被擋下。
-- [x] `schemas/` 11 個檔案存在且相互驗證通過（contracts tests）。
+- [x] §21.1 所列 `schemas/` 檔案存在且相互驗證通過（contracts tests）。
 - [x] canonical JSON（§21.4）：同物件兩次序列化輸出 byte 相等；非 ASCII 鍵排序、`json.Number` round-trip、`<`／`&` 不轉義、輸出無尾換行的 fixture 測試各一；對 struct 直接 canonical hash 的路徑不存在。
 
 **M0b（決定性 SQLi E2E）**

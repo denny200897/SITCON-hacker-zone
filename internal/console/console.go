@@ -29,6 +29,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/credentials"
 	"github.com/aegis-dev/aegis/internal/doctor"
 	"github.com/aegis-dev/aegis/internal/redaction"
@@ -62,6 +63,9 @@ type Deps struct {
 	// RunCommand 將 review/scan/prove/report/replay 交回 cmd 層的既有 CLI pipeline。
 	// args 的第一個元素是子命令名稱，後續元素原樣沿用 CLI flags。
 	RunCommand func(ctx context.Context, args []string, out io.Writer) error
+	// ApproveBuild lets a native UI own the approval interaction. Nil falls back
+	// to the line-oriented console menu.
+	ApproveBuild approval.Approver
 }
 
 // roles 是 §3.1 角色閉集（與 settings / llm 的 role 常數同值；閉集不得各自擴充，
@@ -209,10 +213,34 @@ func (s *session) dispatch(line string) error {
 		if s.deps.RunCommand == nil {
 			return errors.New("pipeline command not wired")
 		}
-		return s.deps.RunCommand(s.ctx, append([]string{strings.TrimPrefix(cmd, "/")}, args...), s.out)
+		approver := s.deps.ApproveBuild
+		if approver == nil {
+			approver = s.approveBuild
+		}
+		ctx := approval.WithApprover(s.ctx, approver)
+		return s.deps.RunCommand(ctx, append([]string{strings.TrimPrefix(cmd, "/")}, args...), s.out)
 	default:
 		return fmt.Errorf("%w: %s", errUnknownCmd, cmd)
 	}
+}
+
+func (s *session) approveBuild(req approval.BuildRequest) (approval.Decision, error) {
+	return approval.Prompt(&scannerReader{scanner: s.sc}, s.out, req)
+}
+
+// scannerReader reuses the console Scanner, avoiding a second buffered reader
+// that could consume commands intended for the REPL after the approval prompt.
+type scannerReader struct{ scanner *bufio.Scanner }
+
+func (r *scannerReader) Read(p []byte) (int, error) {
+	if !r.scanner.Scan() {
+		if err := r.scanner.Err(); err != nil {
+			return 0, err
+		}
+		return 0, io.EOF
+	}
+	line := append([]byte(r.scanner.Text()), '\n')
+	return copy(p, line), nil
 }
 
 // splitCommandLine 支援 REPL 中的單／雙引號與反斜線，讓 CLI flags 可原樣使用，

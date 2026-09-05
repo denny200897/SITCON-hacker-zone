@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/credentials"
 	"github.com/aegis-dev/aegis/internal/llm"
 	"github.com/aegis-dev/aegis/internal/orchestrator"
@@ -73,6 +74,9 @@ type Options struct {
 	ConnectTimeout time.Duration
 	// SemgrepBin 是 semgrep 執行檔；空值 → "semgrep"（§6）。
 	SemgrepBin string
+	// ApproveBuild is called immediately before a missing pack image is built.
+	// Nil means approval was already established by the explicit /doctor command.
+	ApproveBuild approval.Approver
 }
 
 // ---- 預設值與小工具 ----
@@ -247,12 +251,18 @@ func checkPacks(ctx context.Context, o Options) []Check {
 	return out
 }
 
+// PreparePacks resolves/builds only pack images. review/prove use this preflight
+// without also probing Semgrep and external model providers.
+func PreparePacks(ctx context.Context, o Options) []Check {
+	return checkPacks(ctx, o)
+}
+
 // checkPackImages 對單一 pack 的所有模板映像依 §17.10 解析序逐一定址：
 //
 //  1. manifest 已記 digest 且本機 docker 有該 digest 映像 → OK，免構建。
 //  2. images.json 已記錄該參照的 digest → OK，免構建（§17.10 第 3 階記錄在案）。
-//  3. 皆無 → 本地構建（§17.10：/doctor 是核准構建點，prove 不自動構建），
-//     以 docker inspect 取 repo digest 後 RecordImage 落檔。
+//  3. 皆無 → 在 /doctor 的顯式操作，或 review/prove 的人類核准
+//     preflight 中本地構建，以 docker inspect 取 repo digest 後 RecordImage 落檔。
 func checkPackImages(ctx context.Context, o Options, bin, dir string, pack *packs.Pack) Check {
 	name := filepath.Base(dir)
 	c := Check{Name: "pack:" + name}
@@ -287,6 +297,21 @@ func checkPackImages(ctx context.Context, o Options, bin, dir string, pack *pack
 			continue
 		}
 		// 3) 本地構建（核准構建點，§17.10）。
+		if o.ApproveBuild != nil {
+			decision, approveErr := o.ApproveBuild(approval.BuildRequest{
+				Pack: name, Image: ref,
+				Action: "docker build 並記錄 derived image digest", BuildDir: dir,
+				Network: "Docker 預設 build 網路（pack Dockerfile 可對外取得依賴）", RunNetwork: "none",
+			})
+			if approveErr != nil {
+				problems = append(problems, fmt.Sprintf("無法取得 %s 構建核准：%v", shortRef(ref), approveErr))
+				continue
+			}
+			if decision == approval.Deny {
+				problems = append(problems, fmt.Sprintf("使用者未核准建立 %s；未執行 Docker build", shortRef(ref)))
+				continue
+			}
+		}
 		note, problem := buildAndRecord(ctx, o, bin, dir, pack.Manifest.Version, ref)
 		if note != "" {
 			notes = append(notes, note)

@@ -108,8 +108,16 @@ chain-of-thought 不會也不能被偽造展示；介面顯示的是模型實際
 - Semgrep detector 只快速產生 pattern candidate；其 `languages` 不代表能 build。
 - Proof runtime 由 template 的 digest-pinned image、service command 與允許的 witness
   檔案決定。AI 不能任意挑 host compiler 或可變 Docker image，以免繞過 sandbox。
-- 成功 build 只證明環境可編譯／啟動，不等於漏洞成立。`PROVEN` 還必須由該漏洞
-  家族的可信 oracle 觀察到 nonce-backed 副作用。
+- `review`/`prove` 若發現 proof image 尚未在本機準備，互動終端會先顯示
+  image、build 動作與網路政策的核准選單；直接 Enter 只允許當次。非 TTY
+  環境預設拒絕 build，CI 必須顯式加上 `--approve-build`。
+- review 會把環境準備顯示為獨立的 `[2/5] ENVIRONMENT` 階段。Python v1 會在
+  digest-pinned image 中，以唯讀 snapshot、`--network none` 執行 `compile()`
+  smoke check，並把結果寫入 `environment.json`。
+- `SOURCE_COMPILED` 只證明 Python 原始碼可編譯；不代表依賴已安裝、應用已啟動，
+  更不等於漏洞成立。`PROVEN` 還必須由該漏洞家族的可信 oracle 觀察到
+  nonce-backed 副作用。若 runtime 已就緒但缺 oracle，畫面會明確顯示
+  `PROVE skipped — no matching trusted oracle`。
 
 因此「proof runtime 不能執行 `.go`」表示目前缺 Go 的固定建置／啟動 backend，
 不是 Semgrep 禁止掃 Go。LLM 仍會審查並回報 Go finding；在 Go runtime 和對應

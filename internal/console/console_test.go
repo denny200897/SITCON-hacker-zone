@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/credentials"
 	"github.com/aegis-dev/aegis/internal/doctor"
 	"github.com/aegis-dev/aegis/internal/settings"
@@ -348,6 +349,24 @@ func TestPipelineCommandsReuseCLIArguments(t *testing.T) {
 		if !slices.Equal(calls[i], want[i]) {
 			t.Errorf("call[%d] = %#v, want %#v", i, calls[i], want[i])
 		}
+	}
+}
+
+func TestPipelineBuildApprovalUsesConsoleInput(t *testing.T) {
+	d, _, _ := newDeps(t)
+	var decision approval.Decision
+	d.RunCommand = func(ctx context.Context, _ []string, _ io.Writer) error {
+		approver := approval.FromContext(ctx)
+		if approver == nil {
+			t.Fatal("pipeline context missing build approver")
+		}
+		var err error
+		decision, err = approver(approval.BuildRequest{Pack: "go-web", Image: "go@sha256:test", Action: "build", Network: "pinned", RunNetwork: "none"})
+		return err
+	}
+	out := run(t, d, "/prove\n\nexit\n")
+	if decision != approval.AllowOnce || !strings.Contains(out, "Aegis 需要建立驗證環境") {
+		t.Fatalf("decision=%v output=%s", decision, out)
 	}
 }
 

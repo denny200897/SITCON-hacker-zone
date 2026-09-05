@@ -11,11 +11,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/aegis-dev/aegis/internal/agent"
+	"github.com/aegis-dev/aegis/internal/approval"
+	"github.com/aegis-dev/aegis/internal/doctor"
 	"github.com/aegis-dev/aegis/internal/inventory"
+	"github.com/aegis-dev/aegis/internal/journal"
 	"github.com/aegis-dev/aegis/internal/llm"
+	"github.com/aegis-dev/aegis/internal/orchestrator/snapshot"
 	"github.com/aegis-dev/aegis/internal/packs"
 	"github.com/aegis-dev/aegis/internal/reporting"
+	"github.com/aegis-dev/aegis/internal/sandbox"
 )
 
 func TestProverAdapterUsesConfiguredRoleProviderAndEnvironmentKey(t *testing.T) {
@@ -71,7 +78,7 @@ func TestStageHelpOnlyShowsRelevantFlags(t *testing.T) {
 		none  []string
 	}{
 		{stage: "scan", want: []string{"--target", "--target-subdir", "--pack", "--run-dir", "--watch"}, none: []string{"--spec", "--hypotheses", "--set-disposition"}},
-		{stage: "prove", want: []string{"--target", "--target-subdir", "--pack", "--run-dir", "--spec", "--watch", "--hypotheses"}, none: []string{"--set-disposition"}},
+		{stage: "prove", want: []string{"--target", "--target-subdir", "--pack", "--run-dir", "--spec", "--watch", "--hypotheses", "--approve-build"}, none: []string{"--set-disposition"}},
 		{stage: "report", want: []string{"--target", "--run-dir", "--set-disposition", "--watch"}, none: []string{"--target-subdir", "--pack", "--spec", "--hypotheses"}},
 		{stage: "replay", want: []string{"--target", "--run-dir", "--pack"}, none: []string{"--target-subdir", "--spec", "--watch", "--hypotheses", "--set-disposition"}},
 	}
@@ -95,6 +102,86 @@ func TestStageHelpOnlyShowsRelevantFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildApprovalFlagAndNonInteractiveDefault(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetIn(strings.NewReader("\n"))
+	cmd.SetOut(&bytes.Buffer{})
+	req := approval.BuildRequest{Pack: "go-web", Image: "go@sha256:test"}
+	if decision, err := commandBuildApprover(cmd, false)(req); decision != approval.Deny || err == nil || !strings.Contains(err.Error(), "--approve-build") {
+		t.Fatalf("non-interactive decision=%v err=%v", decision, err)
+	}
+	if decision, err := commandBuildApprover(cmd, true)(req); decision != approval.AllowRun || err != nil {
+		t.Fatalf("preapproved decision=%v err=%v", decision, err)
+	}
+}
+
+func TestPrepareEnvironmentRunsForUnsupportedPythonFinding(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("AEGIS_CACHE_DIR", cache)
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "app.py"), []byte("print('ok')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := snapshot.Create(target, cache, inventory.DefaultExcludes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDir := t.TempDir()
+	j, err := journal.Open(filepath.Join(runDir, "journal.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Append("snapshot_created", "", map[string]any{"snapshot_id": snap.ID, "tree_hash": snap.TreeHash}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oldPrepare, oldCheck := preparePacksForRun, checkEnvironmentForRun
+	t.Cleanup(func() { preparePacksForRun, checkEnvironmentForRun = oldPrepare, oldCheck })
+	preparePacksForRun = func(context.Context, doctor.Options) []doctor.Check {
+		return []doctor.Check{{Name: "pack:python-web", OK: true}}
+	}
+	checkCalls := 0
+	checkEnvironmentForRun = func(_ context.Context, spec sandbox.EnvironmentCheckSpec) ([]byte, error) {
+		checkCalls++
+		if spec.SnapshotID != snap.ID || spec.Image == "" || spec.Cmd[0] != "python" || spec.Cmd[1] != "-c" {
+			t.Fatalf("environment spec = %+v", spec)
+		}
+		return nil, nil
+	}
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	finding := reporting.Finding{
+		"id": "F-0001", "snapshot_id": snap.ID, "proof_supported": false,
+		"sink": map[string]any{"file": "app.py", "line": 1, "symbol": "app", "type": "open_redirect"},
+	}
+	if err := prepareRunEnvironment(cmd, runDir, filepath.Join("..", "..", "packs", "python-web"), []reporting.Finding{finding}, true); err != nil {
+		t.Fatal(err)
+	}
+	if checkCalls != 1 {
+		t.Fatalf("environment check calls=%d", checkCalls)
+	}
+	data, err := os.ReadFile(filepath.Join(runDir, "environment.json"))
+	if err != nil || !strings.Contains(string(data), `"status": "SOURCE_COMPILED"`) {
+		t.Fatalf("environment.json=%s err=%v", data, err)
+	}
+
+	if err := os.Remove(filepath.Join(runDir, "environment.json")); err != nil {
+		t.Fatal(err)
+	}
+	preparePacksForRun = func(context.Context, doctor.Options) []doctor.Check {
+		return []doctor.Check{{Name: "pack:python-web", OK: false, Detail: "build denied"}}
+	}
+	if err := prepareRunEnvironment(cmd, runDir, filepath.Join("..", "..", "packs", "python-web"), []reporting.Finding{finding}, true); err == nil {
+		t.Fatal("failed environment preparation unexpectedly succeeded")
+	}
+	data, err = os.ReadFile(filepath.Join(runDir, "environment.json"))
+	if err != nil || !strings.Contains(string(data), `"status": "NOT_READY"`) || !strings.Contains(string(data), "build denied") {
+		t.Fatalf("failed environment.json=%s err=%v", data, err)
 	}
 }
 
@@ -235,6 +322,29 @@ func TestDecodeReviewCandidatesAcceptsStringOrArrayEvidence(t *testing.T) {
 		if len(got) != 1 || len(got[0].Evidence) != 1 || got[0].Evidence[0] != "main.go:2" || len(got[0].Chain) == 0 {
 			t.Fatalf("decoded = %+v", got)
 		}
+	}
+}
+
+func TestDecodeReviewCandidatesExtractsJSONFromReviewerCommentary(t *testing.T) {
+	want := `{"analysis_summary":"checked","candidates":[{"file":"app.py","line":9,"type":"auth.session","evidence":"app.py:9","chain":"cookie to session"}]}`
+	for _, payload := range []string{
+		"調查完成，以下是結果。 ```json " + want + " ```",
+		"Based on the reviewed routes:\n```json\n" + want + "\n```\nEnd of review.",
+		"摘要中的範例 {not-json} 不應阻擋後方結果。\n" + want,
+	} {
+		got, err := decodeReviewCandidates(payload)
+		if err != nil {
+			t.Fatalf("decode %q: %v", payload, err)
+		}
+		if len(got) != 1 || got[0].File != "app.py" || got[0].Line != 9 {
+			t.Fatalf("decoded = %+v", got)
+		}
+	}
+}
+
+func TestDecodeReviewCandidatesRejectsCommentaryWithoutJSON(t *testing.T) {
+	if _, err := decodeReviewCandidates("調查完成，但沒有附上結構化結果。"); err == nil {
+		t.Fatal("commentary without JSON must not silently become zero candidates")
 	}
 }
 

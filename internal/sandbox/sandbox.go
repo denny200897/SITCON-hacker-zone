@@ -26,6 +26,59 @@ type Runner struct {
 	HelperImage string
 }
 
+// EnvironmentCheckSpec is a core-generated smoke check. Cmd is selected by a
+// trusted runtime resolver, never accepted from repository content or the LLM.
+type EnvironmentCheckSpec struct {
+	RunID, SnapshotID, SnapshotDir string
+	Image, Seccomp                 string
+	Cmd                            []string
+	TimeoutSec                     int
+}
+
+// CheckEnvironment runs a read-only, networkless compile/syntax check against
+// the immutable snapshot without creating proof evidence or claiming a
+// vulnerability is proven.
+func (r *Runner) CheckEnvironment(ctx context.Context, spec EnvironmentCheckSpec) ([]byte, error) {
+	if !idRe.MatchString(spec.RunID) || !idRe.MatchString(spec.SnapshotID) {
+		return nil, fmt.Errorf("sandbox: environment check ID 非法")
+	}
+	if !digestRe.MatchString(spec.Image) {
+		return nil, fmt.Errorf("sandbox: environment image 須為 digest：%q", spec.Image)
+	}
+	if spec.TimeoutSec < 1 {
+		return nil, fmt.Errorf("sandbox: environment timeout 須 >= 1")
+	}
+	snapshotDir, err := canonicalHostDir(spec.SnapshotDir)
+	if err != nil {
+		return nil, err
+	}
+	hardening, err := HardeningFlags(spec.Seccomp)
+	if err != nil {
+		return nil, err
+	}
+	if len(spec.Cmd) == 0 {
+		return nil, fmt.Errorf("sandbox: environment check cmd 不得為空")
+	}
+	args := []string{"run", "--rm"}
+	args = append(args, hardening...)
+	args = append(args,
+		"--network", NetworkNone,
+		"--mount", fmt.Sprintf("type=bind,src=%s,dst=%s,readonly", snapshotDir, TargetMountPoint),
+		"--label", LabelRunID+"="+spec.RunID,
+		"--label", LabelSnapshotID+"="+spec.SnapshotID,
+		spec.Image,
+	)
+	args, err = appendCmdArgs(args, spec.Cmd)
+	if err != nil {
+		return nil, err
+	}
+	out, stderr, err := r.runCtx(ctx, time.Duration(spec.TimeoutSec)*time.Second, args...)
+	if err != nil {
+		return nil, wrapErr("environment check", stderr, err)
+	}
+	return out, nil
+}
+
 // bin 回傳 docker 執行檔名（預設 "docker"）。
 func (r *Runner) bin() string {
 	if r.Bin == "" {

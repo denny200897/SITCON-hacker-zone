@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aegis.dev/schemas/environment.schema.json",
+  "title": "Environment preparation result",
+  "type": "object",
+  "required": ["snapshot_id", "pack", "runtime", "status", "check", "network"],
+  "additionalProperties": false,
+  "properties": {
+    "snapshot_id": {"type": "string", "pattern": "^SN-[0-9a-f]{12}$"},
+    "pack": {"type": "string"},
+    "runtime": {"type": "string", "enum": ["python"]},
+    "image": {"type": "string", "pattern": "^[^@]+@sha256:[0-9a-f]{64}$"},
+    "status": {"type": "string", "enum": ["NOT_READY", "COMPILE_FAILED", "SOURCE_COMPILED"]},
+    "check": {"type": "string"},
+    "network": {"type": "string", "const": "none"},
+    "detail": {"type": "string"}
+  }
+}

@@ -216,15 +216,16 @@ func (r *Runner) Start(ctx context.Context, cid string, timeoutSec int) (exit in
 	return 0, nil
 }
 
-// StartDetached 以 docker start -d 啟動容器（ADR 0005：容器 T 為常駐 trusted
-// side，由 orchestrator 於 reclaim 時終止；不占用 attached stdout）。回傳值只表示
-// 啟動是否成功，容器 exit code 不經本函式（T 的生命週期不構成 run 結果）。
+// StartDetached 以 docker start 啟動容器（ADR 0005：容器 T 為常駐 trusted
+// side，由 orchestrator 於 reclaim 時終止；不占用 attached stdout）。不帶 `-a`
+// 的 docker start 本身即 detached；`-d` 簡寫已在 Docker CLI 28+ 移除，不可使用。
+// 回傳值只表示啟動是否成功，容器 exit code 不經本函式（T 的生命週期不構成 run 結果）。
 func (r *Runner) StartDetached(ctx context.Context, cid string) error {
 	if cid == "" {
 		return fmt.Errorf("sandbox: StartDetached 的 cid 為空")
 	}
-	if _, stderr, err := r.runCtx(ctx, 60*time.Second, "start", "-d", cid); err != nil {
-		return wrapErr("start -d", stderr, err)
+	if _, stderr, err := r.runCtx(ctx, 60*time.Second, "start", cid); err != nil {
+		return wrapErr("start", stderr, err)
 	}
 	return nil
 }

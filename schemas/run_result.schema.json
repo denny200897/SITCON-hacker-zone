@@ -21,6 +21,11 @@
       "type": "object",
       "additionalProperties": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
     },
+    "artifact_redactions": {
+      "type": "object",
+      "description": "ADR 0006：trusted artifact 落盤前樣式遮蔽記錄（檔名 → §7.2 命中樣式名清單）；僅在遮蔽發生時出現，不作靜默處理",
+      "additionalProperties": {"type": "array", "items": {"type": "string"}}
+    },
     "fs_diff": {
       "type": "object",
       "required": ["added", "modified"],

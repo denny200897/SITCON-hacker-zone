@@ -233,3 +233,47 @@ func TestPatternsRegexLiteralMatches(t *testing.T) {
 	}
 	var _ *regexp.Regexp = re
 }
+// TestMaskSpanRedaction（ADR 0006）：樣式命中以 span 遮蔽後保留其餘內容——
+// 誤報（sqlite 錯誤訊息撞 kv_secret）不得連同 nonce 一起吃掉 oracle 證據。
+func TestMaskSpanRedaction(t *testing.T) {
+	// 真實誤報場景：trace 的 error 欄位命中 kv_secret，sql 欄位的 nonce 必須原樣保留。
+	line := `{"error":"SQL logic error: unrecognized token: \"'24591b94b535e328346d299ea329dc9e''\" (1)","params":[],"rows":0,"sql":"SELECT id, name FROM users WHERE name = '24591b94b535e328346d299ea329dc9e''"}`
+	masked, names := Mask(line)
+	if got, want := names, []string{"kv_secret"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Mask names = %v, want %v", got, want)
+	}
+	if strings.Contains(masked, "24591b94b535e328346d299ea329dc9e'") &&
+		!strings.Contains(masked, `"sql":"SELECT id, name FROM users WHERE name = '24591b94b535e328346d299ea329dc9e''"`) {
+		t.Errorf("sql 欄位的 nonce 不應被遮蔽：%s", masked)
+	}
+	if !strings.Contains(masked, `unrecognized ***REDACTED***`) {
+		t.Errorf("error 欄位的命中段應被遮蔽：%s", masked)
+	}
+	if HasSecret(masked) {
+		t.Errorf("遮蔽後不應再命中任何樣式：%s", masked)
+	}
+}
+
+// TestMaskPrivateKeyDownToEnd：private_key 的 (.*?) 段含跨行內容，遮蔽必須蓋掉整段。
+func TestMaskPrivateKeyDownToEnd(t *testing.T) {
+	text := "header\n-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----\ntail"
+	masked, names := Mask(text)
+	if got, want := names, []string{"private_key"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("Mask names = %v, want %v", got, want)
+	}
+	if strings.Contains(masked, "MIIEow") {
+		t.Errorf("私鑰內容應被遮蔽：%s", masked)
+	}
+	if !strings.Contains(masked, "header") || !strings.Contains(masked, "tail") {
+		t.Errorf("命中段以外的內容應保留：%s", masked)
+	}
+}
+
+// TestMaskNoHit：無命中回傳原文與空清單。
+func TestMaskNoHit(t *testing.T) {
+	text := `{"error":null,"sql":"SELECT 1"}`
+	masked, names := Mask(text)
+	if masked != text || len(names) != 0 {
+		t.Errorf("Mask 無命中應無操作：masked=%q names=%v", masked, names)
+	}
+}

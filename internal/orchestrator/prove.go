@@ -427,6 +427,7 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 	}
 	artifacts := []string{}
 	artifactHashes := map[string]any{}
+	artifactRedactions := map[string]any{}
 	ents, rerr := os.ReadDir(artDir)
 	if rerr != nil {
 		return "", "", exit, fmt.Errorf("orchestrator: read artifacts: %w", rerr)
@@ -440,8 +441,15 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		if herr != nil {
 			return "", "", exit, fmt.Errorf("orchestrator: read artifact %s: %w", ent.Name(), herr)
 		}
+		// 樣式命中不再整檔拒收（ADR 0006）：span 級遮蔽後照常落盤並記錄樣式名。
+		// 誤報（如 sqlite 錯誤訊息撞 kv_secret）不會連同 nonce 一起吃掉 oracle 證據。
 		if redaction.HasSecret(string(b)) {
-			return "", "", exit, fmt.Errorf("orchestrator: secret pattern in artifact %s (persistence denied)", ent.Name())
+			masked, names := redaction.Mask(string(b))
+			if err := os.WriteFile(filepath.Join(artDir, ent.Name()), []byte(masked), 0o600); err != nil {
+				return "", "", exit, fmt.Errorf("orchestrator: persist masked artifact %s: %w", ent.Name(), err)
+			}
+			artifactRedactions[ent.Name()] = names
+			b = []byte(masked)
 		}
 		h := sha256.Sum256(b)
 		artifactHashes[ent.Name()] = "sha256:" + hex.EncodeToString(h[:])
@@ -465,7 +473,7 @@ func (p *Prover) executeRun(ctx context.Context, seccomp string, rr map[string]a
 		"runner_version": p.runnerVersion(), "prompt_version": p.promptVersion(), "schemas_version": domain.SchemasVersion,
 		"run_request_hash": requestHash,
 		"run_result": map[string]any{"run_id": runID, "exit": int64(exit), "stdout": string(stdout), "stderr": string(stderr), "stdout_sha256": digestBytes(stdout), "stderr_sha256": digestBytes(stderr), "stdout_truncated": false, "stderr_truncated": false, "artifacts": artifacts, "artifact_hashes": artifactHashes,
-			"fs_diff": fsDiff},
+			"fs_diff": fsDiff, "artifact_redactions": artifactRedactions},
 		"oracle": map[string]any{"oracle_id": strField(rr, "oracle_id"), "nonce": nonce, "nonce_observed": vulnResult || touchResult, "result": vulnResult,
 			"touch": map[string]any{"oracle_id": touchOracleID(p.Pack, strField(rr, "oracle_id")), "result": touchResult}},
 		"created_by": "orchestrator", "verified_by": "checker",

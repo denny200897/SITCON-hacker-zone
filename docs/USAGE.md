@@ -4,7 +4,7 @@
 
 - Go 1.24（從原始碼建置時）
 - Docker daemon
-- `semgrep` 命令
+- `semgrep` 命令（建議；已設定 reviewer 時可在缺少／失敗時降級為純 LLM 全局審查）
 - 至少一個 Anthropic 或 OpenAI-compatible provider 與 API key（自動 prove 時）
 
 在專案根目錄建置：
@@ -20,10 +20,14 @@ go build -o ./bin/aegis ./cmd/aegis
 ```text
 /provider add anthropic
 /key set anthropic
-/model set prover anthropic/<你的模型 ID>
+/model set all anthropic/<你的模型 ID>
 /doctor
+/review --target /path/to/repo --watch
 exit
 ```
+
+互動模式可直接執行完整流水線；`/review`、`/scan`、`/prove`、`/report`、`/replay`
+接受與同名一次性 CLI 完全相同的參數。含空白的路徑可使用單引號或雙引號。
 
 `/provider add` 會互動詢問 provider type：`anthropic`、`openai-compat`（會再詢問 `base_url`），或 `openrouter` 捷徑——仍以 openai-compat 落盤，`base_url` 直接 Enter 即採 `https://openrouter.ai/api/v1`（可貼自訂端點覆蓋）。`/model set` 的角色可給 `all`，一次把同一個 `<provider>/<model-id>` 設到全部五個角色（之後仍可逐一覆寫單一角色）。API key 優先從 `AEGIS_<PROVIDER>_API_KEY` 讀取，其次為 OS keychain，再其次才是權限 `0600` 的 credentials 檔。金鑰不應放入 `aegis.toml`。
 
@@ -50,16 +54,38 @@ max_sandbox_minutes_per_finding = 10
 bundled `python-web` pack 與 schemas 已內嵌進 binary，可從任意工作目錄執行：
 
 ```sh
-./bin/aegis scan --target /path/to/repo
-./bin/aegis prove F-0001 --target /path/to/repo --watch
-./bin/aegis report --target /path/to/repo
-./bin/aegis replay --target /path/to/repo
+./bin/aegis review --target /path/to/repo --watch
 ```
 
-- `scan` 建立 immutable snapshot，再產生 `inventory.json`、`candidates.json`、`triage.json` 與 `findings.json`。
+`review` 是一般使用者入口：自動建立單一 run，依序完成 scan、對所有 finding
+執行 prove、離線 replay evidence，最後才產生 report。沒有 candidate 時會清楚略過
+prove/replay。已設定 reviewer 時，候選發現不受 pack 語言或 sink 白名單限制；pack
+只決定哪些 finding 能進 sandbox/oracle proof。尚無 proof 支援的 finding 仍保留在
+報告並標示「尚未機械實證」。只有未設定 reviewer、detector 又完全不適用時才會
+fail closed，避免產生誤導性的「0 弱點」報告。
+
+LLM reviewer 採兩階段全局審查：先分批讀取跨語言原始碼與設定檔，從輸入面、
+信任邊界、認證授權、狀態競態、資料流與業務邏輯找候選；再以全 repo inventory
+與全部批次候選做跨檔綜整、去重和攻擊鏈補強。每個候選必須帶可在 snapshot 中
+核對的 `file:line` evidence，否則不收錄。Semgrep 是獨立補充來源，不是 LLM 的
+搜尋空間上限。
+
+inventory 目前辨識 Python、Go、JavaScript/TypeScript、Java/Kotlin、PHP、Ruby、
+C#、Rust、Scala、Vue、Svelte，以及常見 markup、設定檔、shell 與 Dockerfile。
+
+`scan`、`prove`、`replay`、`report` 仍保留作為 CI、除錯與斷點續跑的進階介面：
+
+```sh
+./bin/aegis scan --target /path/to/repo
+./bin/aegis prove --target /path/to/repo --watch
+./bin/aegis replay --target /path/to/repo
+./bin/aegis report --target /path/to/repo
+```
+
+- `scan` 建立 immutable snapshot，執行確定性 detector；若已設定 reviewer，會再依序呼叫 recon、reviewer 與 triager 完成模型審查，最後產生 `inventory.json`、`candidates.json`、`triage.json` 與 `findings.json`。未設定 reviewer 時保留零 LLM 的確定性掃描模式。
 - `prove F-0001` 從最新 scan run 讀 finding，透過設定好的 prover tool loop 自動產生 WitnessSpec，再執行三控制 sandbox。省略 finding ID 會依序處理該 run 的全部 findings。
 - `--hypotheses N` 可覆寫 `[budget]` 的假設上限。
-- `report` 產生 `findings.json`、`findings.sarif` 與 `report.md`。
+- `report` 產生 `findings.json`、`findings.sarif` 與 `report.md`；已設定 reporter 時由該角色撰寫 Markdown，否則使用確定性模板。
 - `replay` 離線重驗 evidence bundle。
 - 若不是使用最新 run，四個命令都可用 `--run-dir /path/to/out/run-...` 明確指定。
 

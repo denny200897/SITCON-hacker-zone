@@ -34,6 +34,10 @@
     },
     "matched_text": {"type": "string"},
     "suspected_vuln_class": {"type": "string"},
+    "cwe": {"type": "string", "pattern": "^CWE-[0-9]+$"},
+    "impact": {"type": "string", "enum": ["high", "medium", "low"]},
+    "evidence": {"type": "array", "items": {"type": "string"}},
+    "chain": {"type": "array", "items": {"type": "string"}},
     "rationale": {"type": "string"},
     "batch_id": {"type": "string"},
     "priority_hint": {"type": "string", "enum": ["low", "medium", "high"]}

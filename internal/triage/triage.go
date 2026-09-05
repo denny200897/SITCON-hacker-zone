@@ -80,8 +80,15 @@ func EvaluateAt(c candidates.Candidate, inv *inventory.Inventory, snapshotDir st
 	if err != nil {
 		return Assess(c.ID, c.PriorityHint, RubricEvidence{})
 	}
-	sinkFn := functionAt(pythonFunctions(string(data)), c.Sink.Line)
 	location := fmt.Sprintf("%s:%d", c.Sink.File, c.Sink.Line)
+	// 跨語言 reviewer 會回傳 handler symbol；inventory 已用各框架 route
+	// extractor 錨定它時，不需要用 Python parser 才能判定 D0。
+	for _, route := range inv.Routes {
+		if route.HandlerFile == c.Sink.File && route.HandlerSymbol != "" && route.HandlerSymbol == c.Sink.Symbol {
+			return Assess(c.ID, c.PriorityHint, RubricEvidence{DefaultFlow: true, DefaultAt: location})
+		}
+	}
+	sinkFn := functionAt(pythonFunctions(string(data)), c.Sink.Line)
 	if sinkFn != "" {
 		for _, route := range inv.Routes {
 			if route.HandlerFile == c.Sink.File && route.HandlerSymbol == sinkFn {

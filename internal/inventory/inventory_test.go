@@ -94,6 +94,46 @@ def load_config():
 	}
 }
 
+func TestBuildGinApp(t *testing.T) {
+	root := writeRepo(t, map[string]string{
+		"main.go": `package main
+import (
+  "os"
+  "github.com/gin-gonic/gin"
+)
+func loginHandler(c *gin.Context) { _ = os.Getenv("JWT_SECRET") }
+func main() {
+  r := gin.Default()
+  r.POST("/api/login", loginHandler)
+}
+`,
+		"go.mod": "module example.test/app\n\nrequire github.com/gin-gonic/gin v1.10.0\n",
+	})
+	inv, err := Build(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Files[1].Language != "go" && inv.Files[0].Language != "go" {
+		t.Fatalf("files = %+v", inv.Files)
+	}
+	if len(inv.Frameworks) != 1 || inv.Frameworks[0] != "gin" {
+		t.Fatalf("frameworks = %v", inv.Frameworks)
+	}
+	if len(inv.Routes) != 1 || inv.Routes[0].Path != "/api/login" || inv.Routes[0].HandlerSymbol != "loginHandler" {
+		t.Fatalf("routes = %+v", inv.Routes)
+	}
+	kinds := map[string]int{}
+	for _, entry := range inv.Entrypoints {
+		kinds[entry.Kind]++
+	}
+	if kinds["http_handler"] != 1 || kinds["env"] != 1 {
+		t.Fatalf("entrypoints = %+v", inv.Entrypoints)
+	}
+	if len(inv.Dependencies) != 1 || inv.Dependencies[0].Name != "github.com/gin-gonic/gin" {
+		t.Fatalf("dependencies = %+v", inv.Dependencies)
+	}
+}
+
 func TestIsExcluded(t *testing.T) {
 	cases := map[string]bool{
 		".git/config":           true,
@@ -159,5 +199,18 @@ func TestModuleOf(t *testing.T) {
 	}
 	if got := moduleOf("main.py"); got != "main" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestCommonWebLanguagesAreClassified(t *testing.T) {
+	tests := map[string]string{
+		"app.js": "javascript", "route.ts": "typescript", "Api.java": "java", "App.kt": "kotlin",
+		"index.php": "php", "users.rb": "ruby", "Controller.cs": "csharp", "main.rs": "rust",
+		"App.vue": "vue", "Page.svelte": "svelte", "Api.scala": "scala",
+	}
+	for name, want := range tests {
+		if got := languageOf(name); got != want {
+			t.Errorf("languageOf(%q) = %q, want %q", name, got, want)
+		}
 	}
 }

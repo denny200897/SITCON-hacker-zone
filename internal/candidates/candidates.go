@@ -19,6 +19,10 @@ type Candidate struct {
 	Sources            []Source `json:"sources"`
 	MatchedText        string   `json:"matched_text,omitempty"`
 	SuspectedVulnClass string   `json:"suspected_vuln_class,omitempty"`
+	CWE                string   `json:"cwe,omitempty"`
+	Impact             string   `json:"impact,omitempty"`
+	Evidence           []string `json:"evidence,omitempty"`
+	Chain              []string `json:"chain,omitempty"`
 	Rationale          string   `json:"rationale,omitempty"`
 	PriorityHint       string   `json:"priority_hint,omitempty"`
 }
@@ -121,6 +125,20 @@ func Merge(groups ...[]Candidate) []Candidate {
 						last.Sources = append(last.Sources, source)
 					}
 				}
+				if last.CWE == "" {
+					last.CWE = hit.CWE
+				}
+				if impactRank(hit.Impact) > impactRank(last.Impact) {
+					last.Impact = hit.Impact
+				}
+				last.Evidence = appendUnique(last.Evidence, hit.Evidence...)
+				last.Chain = appendUnique(last.Chain, hit.Chain...)
+				if last.Rationale == "" || len(hit.Rationale) > len(last.Rationale) {
+					last.Rationale = hit.Rationale
+				}
+				if last.SuspectedVulnClass == "" {
+					last.SuspectedVulnClass = hit.SuspectedVulnClass
+				}
 				continue
 			}
 		}
@@ -130,6 +148,33 @@ func Merge(groups ...[]Candidate) []Candidate {
 		merged[i].ID = fmt.Sprintf("C-%04d", i+1)
 	}
 	return merged
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := map[string]bool{}
+	for _, value := range values {
+		seen[value] = true
+	}
+	for _, value := range additions {
+		if value != "" && !seen[value] {
+			values = append(values, value)
+			seen[value] = true
+		}
+	}
+	return values
+}
+
+func impactRank(impact string) int {
+	switch impact {
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
 }
 
 func hasSource(sources []Source, want Source) bool {

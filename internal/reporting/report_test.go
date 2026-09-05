@@ -127,4 +127,43 @@ func TestWriteReportMDD2WithoutAssumptionHeaderIsWrong(t *testing.T) {
 	}
 }
 
+func TestWriteReportMDEmptyFindingsDoesNotClaimSecurity(t *testing.T) {
+	dir := t.TempDir()
+	path, err := WriteReportMD(dir, nil, "out/run-empty", testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"不代表", "覆蓋範圍", "不構成「系統安全」結論"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("empty report missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestWriteReportMDKeepsUnsupportedReviewFinding(t *testing.T) {
+	dir := t.TempDir()
+	finding := sampleFinding("F-0008", "NOT_RUN", "D0")
+	finding["sink"] = map[string]any{"file": "main.go", "line": 91, "symbol": "addTries", "type": "race_condition"}
+	finding["proof_supported"] = false
+	finding["proof_note"] = "Go race oracle 尚未提供"
+	finding["cwe"] = "CWE-362"
+	finding["review_evidence"] = []any{"main.go:73", "main.go:91"}
+	path, err := WriteReportMD(dir, []Finding{finding}, dir, testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	text := string(data)
+	for _, want := range []string{"尚未機械實證", "Go race oracle 尚未提供", "CWE-362", "main.go:73", "尚無機械 proof 支援 1"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("report missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func testNow() time.Time { return time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC) }

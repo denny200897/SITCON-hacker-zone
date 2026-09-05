@@ -138,8 +138,35 @@ func Build(root string) (*Inventory, error) {
 				for _, fw := range detectFrameworks(src) {
 					fwSet[fw] = true
 				}
-				inv.Routes = append(inv.Routes, extractRoutes(rel, src)...)
+				routes := extractRoutes(rel, src)
+				inv.Routes = append(inv.Routes, routes...)
 				inv.Entrypoints = append(inv.Entrypoints, extractEntrypoints(rel, src)...)
+				inv.Entrypoints = append(inv.Entrypoints, routeEntrypoints(routes)...)
+			}
+		}
+		if lang == "go" {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				src := string(data)
+				for _, fw := range detectGoFrameworks(src) {
+					fwSet[fw] = true
+				}
+				routes := extractGoRoutes(rel, src)
+				inv.Routes = append(inv.Routes, routes...)
+				inv.Entrypoints = append(inv.Entrypoints, extractGoEntrypoints(rel, src)...)
+				inv.Entrypoints = append(inv.Entrypoints, routeEntrypoints(routes)...)
+			}
+		}
+		if isWebSourceLanguage(lang) && lang != "python" && lang != "go" {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				src := string(data)
+				for _, fw := range detectGenericFrameworks(src) {
+					fwSet[fw] = true
+				}
+				routes := extractCommonRoutes(rel, src)
+				inv.Routes = append(inv.Routes, routes...)
+				inv.Entrypoints = append(inv.Entrypoints, routeEntrypoints(routes)...)
 			}
 		}
 		return nil
@@ -148,7 +175,7 @@ func Build(root string) (*Inventory, error) {
 		return nil, err
 	}
 
-	deps, notes, err := readDeps(root)
+	deps, notes, err := readDeps(root, inv.Files)
 	if err != nil {
 		return nil, err
 	}
@@ -181,16 +208,74 @@ func languageOf(name string) string {
 	switch {
 	case strings.HasSuffix(name, ".py"):
 		return "python"
+	case strings.HasSuffix(name, ".go"):
+		return "go"
+	case strings.HasSuffix(name, ".js"), strings.HasSuffix(name, ".jsx"), strings.HasSuffix(name, ".mjs"), strings.HasSuffix(name, ".cjs"):
+		return "javascript"
+	case strings.HasSuffix(name, ".ts"), strings.HasSuffix(name, ".tsx"):
+		return "typescript"
+	case strings.HasSuffix(name, ".java"):
+		return "java"
+	case strings.HasSuffix(name, ".kt"), strings.HasSuffix(name, ".kts"):
+		return "kotlin"
+	case strings.HasSuffix(name, ".php"):
+		return "php"
+	case strings.HasSuffix(name, ".rb"):
+		return "ruby"
+	case strings.HasSuffix(name, ".cs"):
+		return "csharp"
+	case strings.HasSuffix(name, ".rs"):
+		return "rust"
+	case strings.HasSuffix(name, ".scala"):
+		return "scala"
+	case strings.HasSuffix(name, ".groovy"):
+		return "groovy"
+	case strings.HasSuffix(name, ".ex"), strings.HasSuffix(name, ".exs"):
+		return "elixir"
+	case strings.HasSuffix(name, ".clj"), strings.HasSuffix(name, ".cljs"):
+		return "clojure"
+	case strings.HasSuffix(name, ".lua"):
+		return "lua"
+	case strings.HasSuffix(name, ".vue"):
+		return "vue"
+	case strings.HasSuffix(name, ".svelte"):
+		return "svelte"
+	case strings.HasSuffix(name, ".html"), strings.HasSuffix(name, ".htm"), strings.HasSuffix(name, ".jsp"), strings.HasSuffix(name, ".erb"):
+		return "markup"
+	case strings.HasSuffix(name, ".jinja"), strings.HasSuffix(name, ".jinja2"), strings.HasSuffix(name, ".j2"), strings.HasSuffix(name, ".twig"), strings.HasSuffix(name, ".hbs"), strings.HasSuffix(name, ".ejs"):
+		return "template"
+	case strings.HasSuffix(name, ".graphql"), strings.HasSuffix(name, ".gql"):
+		return "graphql"
+	case strings.HasSuffix(name, ".sql"):
+		return "sql"
+	case strings.HasSuffix(name, ".json"), strings.HasSuffix(name, ".yaml"), strings.HasSuffix(name, ".yml"), strings.HasSuffix(name, ".xml"), strings.HasSuffix(name, ".properties"):
+		return "config"
+	case strings.HasSuffix(name, ".sh"), strings.HasSuffix(name, ".bash"):
+		return "shell"
+	case name == "Dockerfile" || strings.HasPrefix(name, "Dockerfile."):
+		return "dockerfile"
 	case name == "requirements.txt" || strings.HasSuffix(name, ".toml"):
 		return "toml"
+	case name == "go.mod" || name == "go.sum":
+		return "go-module"
 	default:
 		return "other"
 	}
 }
 
-// moduleOf 把 "app/db.py" 轉成 "app.db"。
+func isWebSourceLanguage(language string) bool {
+	switch language {
+	case "python", "go", "javascript", "typescript", "java", "kotlin", "php", "ruby", "csharp", "rust", "scala", "groovy", "elixir", "clojure", "lua", "vue", "svelte":
+		return true
+	default:
+		return false
+	}
+}
+
+// moduleOf 把 "app/db.py" 轉成 "app.db"，並去除其他已知原始碼副檔名。
 func moduleOf(rel string) string {
-	s := strings.TrimSuffix(filepath.ToSlash(rel), ".py")
+	s := filepath.ToSlash(rel)
+	s = strings.TrimSuffix(s, filepath.Ext(s))
 	return strings.ReplaceAll(s, "/", ".")
 }
 
@@ -206,6 +291,38 @@ func detectFrameworks(src string) []string {
 	}
 	if strings.Contains(src, "from django") || strings.Contains(src, "import django") {
 		out = append(out, "django")
+	}
+	return out
+}
+
+func detectGoFrameworks(src string) []string {
+	var out []string
+	if strings.Contains(src, `github.com/gin-gonic/gin`) {
+		out = append(out, "gin")
+	}
+	if strings.Contains(src, `"net/http"`) {
+		out = append(out, "net/http")
+	}
+	return out
+}
+
+func detectGenericFrameworks(src string) []string {
+	markers := []struct{ name, marker string }{
+		{"express", "from \"express\""}, {"express", "require('express')"}, {"fastify", "from \"fastify\""},
+		{"nestjs", "@nestjs/"}, {"nextjs", "next/"}, {"spring", "org.springframework"},
+		{"laravel", "Illuminate\\"}, {"rails", "Rails.application.routes"}, {"sinatra", "require 'sinatra'"},
+		{"aspnet-core", "Microsoft.AspNetCore"}, {"actix-web", "actix_web"}, {"axum", "axum::"},
+		{"play", "play.api."}, {"vue", "from 'vue'"}, {"svelte", "svelte/"},
+		{"ktor", "io.ktor"}, {"micronaut", "io.micronaut"}, {"quarkus", "io.quarkus"},
+		{"phoenix", "use Phoenix."}, {"ring", "ring.adapter"}, {"openresty", "ngx.req"},
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, marker := range markers {
+		if strings.Contains(src, marker.marker) && !seen[marker.name] {
+			seen[marker.name] = true
+			out = append(out, marker.name)
+		}
 	}
 	return out
 }
@@ -272,6 +389,41 @@ func extractRoutes(file, src string) []Route {
 	return out
 }
 
+var goRouteRe = regexp.MustCompile(`(?m)([A-Za-z_][A-Za-z0-9_]*)\.(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\(\s*"([^"]+)"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)`)
+var commonRouteRe = regexp.MustCompile(`(?m)(?:app|router|server|Route(?:::)?)\.?\s*(get|post|put|delete|patch|options|head)\(\s*["'\x60]([^"'\x60]+)["'\x60]\s*,\s*([A-Za-z_$][A-Za-z0-9_$]*)`)
+
+func extractGoRoutes(file, src string) []Route {
+	var out []Route
+	for _, loc := range goRouteRe.FindAllStringSubmatchIndex(src, -1) {
+		out = append(out, Route{
+			Method:        src[loc[4]:loc[5]],
+			Path:          src[loc[6]:loc[7]],
+			HandlerFile:   filepath.ToSlash(file),
+			HandlerLine:   1 + strings.Count(src[:loc[0]], "\n"),
+			HandlerSymbol: src[loc[8]:loc[9]],
+		})
+	}
+	return out
+}
+
+func extractCommonRoutes(file, src string) []Route {
+	var out []Route
+	for _, loc := range commonRouteRe.FindAllStringSubmatchIndex(src, -1) {
+		out = append(out, Route{Method: strings.ToUpper(src[loc[2]:loc[3]]), Path: src[loc[4]:loc[5]],
+			HandlerFile: filepath.ToSlash(file), HandlerLine: 1 + strings.Count(src[:loc[0]], "\n"), HandlerSymbol: src[loc[6]:loc[7]]})
+	}
+	return out
+}
+
+func routeEntrypoints(routes []Route) []Entrypoint {
+	out := make([]Entrypoint, 0, len(routes))
+	for _, route := range routes {
+		out = append(out, Entrypoint{Kind: "http_handler", File: route.HandlerFile, Line: route.HandlerLine,
+			Symbol: route.HandlerSymbol, Detail: route.Method + " " + route.Path})
+	}
+	return out
+}
+
 // ---- 入口面抽取（env / file_read）----
 
 var osEnvRe = regexp.MustCompile(`os\.environ(?:\.get)?\(\s*["']([A-Za-z0-9_]+)["']`)
@@ -306,13 +458,32 @@ func extractEntrypoints(file, src string) []Entrypoint {
 	return out
 }
 
+var goEnvRe = regexp.MustCompile(`os\.Getenv\(\s*"([A-Za-z0-9_]+)"`)
+var goReadFileRe = regexp.MustCompile(`(?:os\.)?ReadFile\(\s*([^,\)]+)`)
+
+func extractGoEntrypoints(file, src string) []Entrypoint {
+	var out []Entrypoint
+	for _, e := range scanLines(goEnvRe, src) {
+		out = append(out, Entrypoint{Kind: "env", File: file, Line: e.line, Symbol: e.name})
+	}
+	for _, e := range scanLines(goReadFileRe, src) {
+		out = append(out, Entrypoint{Kind: "file_read", File: file, Line: e.line, Symbol: strings.TrimSpace(e.name)})
+	}
+	return out
+}
+
 // ---- 依賴清單 ----
 
 var reqLineRe = regexp.MustCompile(`^([A-Za-z0-9_.\-]+)([<>=~!]+[^;\s]+)?`)
 
-func readDeps(root string) ([]Dependency, []string, error) {
+func readDeps(root string, files []File) ([]Dependency, []string, error) {
 	var out []Dependency
 	var notes []string
+	hasPython, hasGo := false, false
+	for _, file := range files {
+		hasPython = hasPython || file.Language == "python"
+		hasGo = hasGo || file.Language == "go"
+	}
 
 	// requirements.txt
 	if data, err := os.ReadFile(filepath.Join(root, "requirements.txt")); err == nil {
@@ -331,7 +502,7 @@ func readDeps(root string) ([]Dependency, []string, error) {
 			}
 			out = append(out, Dependency{Name: m[1], Version: v, Source: "requirements.txt"})
 		}
-	} else {
+	} else if hasPython {
 		notes = append(notes, "requirements.txt 不存在或不可讀")
 	}
 
@@ -356,6 +527,32 @@ func readDeps(root string) ([]Dependency, []string, error) {
 				}
 			}
 		}
+	}
+
+	if data, err := os.ReadFile(filepath.Join(root, "go.mod")); err == nil {
+		inBlock := false
+		for _, line := range strings.Split(string(data), "\n") {
+			t := strings.TrimSpace(line)
+			if t == "require (" {
+				inBlock = true
+				continue
+			}
+			if inBlock && t == ")" {
+				inBlock = false
+				continue
+			}
+			if strings.HasPrefix(t, "require ") {
+				t = strings.TrimSpace(strings.TrimPrefix(t, "require "))
+			} else if !inBlock {
+				continue
+			}
+			fields := strings.Fields(strings.Split(t, "//")[0])
+			if len(fields) >= 2 {
+				out = append(out, Dependency{Name: fields[0], Version: fields[1], Source: "go.mod"})
+			}
+		}
+	} else if hasGo {
+		notes = append(notes, "go.mod 不存在或不可讀；Go 依賴與可重建性無法確認")
 	}
 	return out, notes, nil
 }

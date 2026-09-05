@@ -466,12 +466,39 @@ func TestProviderConnectTimeoutApplied(t *testing.T) {
 	}
 }
 
+func TestProviderProbeUsesConfiguredRoleModelAndRefusalFails(t *testing.T) {
+	var lastReq llm.ChatRequest
+	newAdapterFn = func(name string, p settings.Provider, key string) (llm.Adapter, error) {
+		return &reqCapture{last: &lastReq, response: llm.Response{Model: "configured-model", StopReason: llm.StopRefusal, RefusalCategory: "cyber"}}, nil
+	}
+	t.Cleanup(func() { newAdapterFn = newAdapter })
+	o := Options{
+		Providers:  map[string]settings.Provider{"openrouter": {Type: "openai-compat", BaseURL: "https://example.invalid/v1"}},
+		Models:     map[string]string{settings.RoleReviewer: "openrouter/configured-model"},
+		ResolveKey: func(string) (string, string, error) { return "test-key", "test", nil },
+	}
+	c := findCheck(t, Run(context.Background(), o), "provider:openrouter")
+	if c.OK {
+		t.Fatalf("refusal 不得標成 OK：%s", c.Detail)
+	}
+	if lastReq.Model != "configured-model" {
+		t.Fatalf("probe model = %q, want configured-model", lastReq.Model)
+	}
+	if !strings.Contains(c.Detail, "requested_model=configured-model") || !strings.Contains(c.Detail, "refusal") && !strings.Contains(c.Detail, "拒絕") {
+		t.Fatalf("detail 未說明實際路由與拒絕：%s", c.Detail)
+	}
+}
+
 type reqCapture struct {
-	last *llm.ChatRequest
+	last     *llm.ChatRequest
+	response llm.Response
 }
 
 func (r *reqCapture) Chat(ctx context.Context, req llm.ChatRequest) (llm.Response, error) {
 	*r.last = req
+	if r.response.StopReason != "" {
+		return r.response, nil
+	}
 	return llm.Response{StopReason: llm.StopEndTurn}, nil
 }
 

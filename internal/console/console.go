@@ -14,7 +14,7 @@
 //     與真實 doctor，測試以 strings.Reader + bytes.Buffer + MemoryKeyring 驅動
 //     （§23：單元測試 stdlib-only）。
 //   - 組態讀取：每條指令執行時重新載入 repo aegis.toml 與使用者 settings.toml
-//    （§3.1 解析序 repo > user；每命令重讀為刻意選擇，簡單且恆正確——外部修改
+//     （§3.1 解析序 repo > user；每命令重讀為刻意選擇，簡單且恆正確——外部修改
 //     立即生效）。
 package console
 
@@ -37,6 +37,8 @@ import (
 
 // Deps 是互動模式的依賴注入點（cmd 層組裝；測試以假件替換）。
 type Deps struct {
+	// Context 控制互動模式及其啟動的長時間工作；nil 時使用 Background。
+	Context context.Context
 	// In 是 REPL 的輸入來源（真實情境為 stdin；測試為 strings.Reader）。
 	In io.Reader
 	// Out 是所有輸出的目的地（真實情境為 stdout；測試為 bytes.Buffer）。
@@ -57,6 +59,9 @@ type Deps struct {
 	// Doctor 是 /doctor 的檢查實作（§3.3：Docker、映像、供應商連通），由 cmd 層
 	// 注入；nil 時以基本 stub 回報「doctor 未接線」。
 	Doctor func(ctx context.Context) []doctor.Check
+	// RunCommand 將 review/scan/prove/report/replay 交回 cmd 層的既有 CLI pipeline。
+	// args 的第一個元素是子命令名稱，後續元素原樣沿用 CLI flags。
+	RunCommand func(ctx context.Context, args []string, out io.Writer) error
 }
 
 // roles 是 §3.1 角色閉集（與 settings / llm 的 role 常數同值；閉集不得各自擴充，
@@ -72,6 +77,7 @@ var roles = []string{
 // session 是單次 Run 的互動狀態。
 type session struct {
 	deps Deps
+	ctx  context.Context
 	out  io.Writer
 	sc   *bufio.Scanner
 }
@@ -108,7 +114,11 @@ func Run(deps Deps) error {
 		deps.CredentialsPath = p
 	}
 
-	s := &session{deps: deps, out: deps.Out}
+	ctx := deps.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s := &session{deps: deps, ctx: ctx, out: deps.Out}
 	s.sc = bufio.NewScanner(deps.In)
 
 	fmt.Fprintln(s.out, "aegis 互動模式（§3.3）：輸入 /help 顯示指令，exit 離開。")
@@ -131,9 +141,12 @@ func Run(deps Deps) error {
 	return s.sc.Err()
 }
 
-// dispatch 解析一行指令並分派（§3.3 表列 10 條）。
+// dispatch 解析一行指令並分派（§3.3）。
 func (s *session) dispatch(line string) error {
-	fields := strings.Fields(line)
+	fields, err := splitCommandLine(line)
+	if err != nil {
+		return err
+	}
 	cmd, args := fields[0], fields[1:]
 	switch cmd {
 	case "/help":
@@ -189,12 +202,78 @@ func (s *session) dispatch(line string) error {
 			return fmt.Errorf("%w：%s（/model 的子指令為 list | set | reset）", errUnknownCmd, line)
 		}
 	case "/status":
-		return s.cmdStatus(context.Background())
+		return s.cmdStatus(s.ctx)
 	case "/doctor":
-		return s.cmdDoctor(context.Background())
+		return s.cmdDoctor(s.ctx)
+	case "/review", "/scan", "/prove", "/report", "/replay":
+		if s.deps.RunCommand == nil {
+			return errors.New("pipeline 指令未接線")
+		}
+		return s.deps.RunCommand(s.ctx, append([]string{strings.TrimPrefix(cmd, "/")}, args...), s.out)
 	default:
 		return fmt.Errorf("%w：%s", errUnknownCmd, cmd)
 	}
+}
+
+// splitCommandLine 支援 REPL 中的單／雙引號與反斜線，讓 CLI flags 可原樣使用，
+// 例如 /scan --target "repo with spaces"。這不是 shell，不展開變數或執行替換。
+func splitCommandLine(line string) ([]string, error) {
+	var fields []string
+	var field strings.Builder
+	var quote rune
+	escaped, started := false, false
+	flush := func() {
+		if started {
+			fields = append(fields, field.String())
+			field.Reset()
+			started = false
+		}
+	}
+	for _, r := range line {
+		if escaped {
+			// 只把反斜線當作空白、引號與反斜線的跳脫；其餘情況保留，
+			// 避免 C:\repo 之類的 Windows 路徑被改寫成 C:repo。
+			if !strings.ContainsRune(" \t\r\n'\"\\", r) {
+				field.WriteRune('\\')
+			}
+			field.WriteRune(r)
+			started, escaped = true, false
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped, started = true, true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			} else {
+				field.WriteRune(r)
+			}
+			started = true
+			continue
+		}
+		switch r {
+		case '\'', '"':
+			quote, started = r, true
+		case ' ', '\t', '\r', '\n':
+			flush()
+		default:
+			field.WriteRune(r)
+			started = true
+		}
+	}
+	if escaped {
+		field.WriteRune('\\')
+	}
+	if quote != 0 {
+		return nil, errors.New("指令含有未閉合的引號")
+	}
+	flush()
+	if len(fields) == 0 {
+		return nil, errors.New("空指令")
+	}
+	return fields, nil
 }
 
 // loadConfigs 每次指令執行時重新載入兩層組態（§3.1：repo aegis.toml >
@@ -222,7 +301,7 @@ func (s *session) manager() *credentials.Manager {
 
 // readSecret 取得 no-echo 金鑰輸入（§3.3 /key set）：優先用注入的實作；
 // 否則降級為自 In 讀一行——非終端機情境無法 no-echo，先警告再讀
-//（cmd 層會接真正的終端機 no-echo 實作）。
+// （cmd 層會接真正的終端機 no-echo 實作）。
 func (s *session) readSecret(prompt string) ([]byte, error) {
 	if s.deps.ReadSecret != nil {
 		return s.deps.ReadSecret(prompt)
@@ -261,12 +340,17 @@ func (s *session) cmdHelp() {
   /model reset                                清空使用者層級模型覆寫
   /status                                     供應商、金鑰、路由、Docker 狀態
   /doctor                                     體檢（Docker、映像、供應商連通）
+  /review [repo] [flags]                      一鍵掃描、實證、重驗並產生報告（建議入口）
+  /scan [flags]                               僅掃描目標 repo（進階／除錯）
+  /prove [F-ID] [flags]                       證明指定 finding；省略 ID 則處理全部
+  /report [flags]                             產生 findings、SARIF 與 Markdown 報告
+  /replay [flags]                             離線重驗 evidence bundle
   exit | quit                                 離開互動模式
 `)
 }
 
 // writeUserChecked 是使用者層級設定檔的唯一寫入路徑：先做金鑰防洩檢查
-//（§3.3、§23-6：任何落盤輸出寫入前，以已登錄金鑰做 redaction），命中即拒寫，
+// （§3.3、§23-6：任何落盤輸出寫入前，以已登錄金鑰做 redaction），命中即拒寫，
 // 再交 settings.SaveUser（0600、父目錄 0700）。
 //
 // 檢查方式：把待寫 TOML 先編成位元組，對「已登錄金鑰清單」（credentials.Manager
@@ -292,7 +376,7 @@ func (s *session) writeUserChecked(repo, user *settings.Config) error {
 }
 
 // resolvedKeys 收集兩層組態中所有供應商目前可解析到的金鑰內容
-//（§3.3 解析序：env > keychain > file）。內容只用於 redaction 比對，
+// （§3.3 解析序：env > keychain > file）。內容只用於 redaction 比對，
 // 永不輸出。
 func (s *session) resolvedKeys(repo, user *settings.Config) []string {
 	mgr := s.manager()

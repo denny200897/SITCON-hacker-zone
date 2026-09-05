@@ -63,6 +63,9 @@ type Options struct {
 	// Providers 是待連通測試的供應商定義（§3.1 aegis.toml／settings.toml 的
 	// [providers] 節；金鑰不在設定檔，§23-6）。
 	Providers map[string]settings.Provider
+	// Models 是已解析的角色路由（role → provider/model-id）。provider 探測必須
+	// 使用這裡實際設定的 model，不得讓相容端點自行挑選預設模型。
+	Models map[string]string
 	// ResolveKey 是金鑰解析注入點（正式路徑：credentials.Manager.Resolve，
 	// §3.3 解析序）；nil → 跳過金鑰步驟（見 checkProviders 內的 ASK 註記）。
 	ResolveKey func(providerName string) (key string, source string, err error)
@@ -570,15 +573,24 @@ func checkProviders(ctx context.Context, o Options, secrets *[]string) []Check {
 			continue
 		}
 
+		model, role := probeModelForProvider(name, o.Models)
+		if len(o.Models) == 0 { // 相容純套件呼叫；有路由時正式 CLI 一律傳入。
+			model, role = probeModelFn(credentials.ProviderType(p.Type)), "probe-default"
+		}
+		if model == "" && len(o.Models) > 0 {
+			c.OK = false
+			c.Detail = "未被任何角色路由引用，無法決定連通測試模型"
+			out = append(out, c)
+			continue
+		}
 		cctx, cancel := context.WithTimeout(ctx, connectTimeoutOf(o))
+		requestRole := llm.RoleRecon
+		if role != "probe-default" {
+			requestRole = llm.Role(role)
+		}
 		req := llm.ChatRequest{
-			Role: llm.RoleRecon, // §4：recon 是最便宜角色；探測呼叫沿用其形狀
-			// ASK：探測用 model id 未見於 spec。採 (a) 固定常數——anthropic 用
-			// §4 角色表 recon 的 claude-haiku-4-5（最便宜）；openai-compat 無
-			// 通用預設、送空值由端點決定。選項 (b)：在 Options 增加探測 model
-			// 或傳入 settings.Config.Models 以角色路由取 model（較貼合使用者
-			// 設定，但 /doctor 需多一項輸入）。
-			Model:    probeModelFn(credentials.ProviderType(p.Type)),
+			Role:     requestRole,
+			Model:    model,
 			Messages: []llm.Message{{Role: "user", Content: []llm.ContentBlock{{Type: "text", Text: "ping"}}}},
 			// MaxTokens 16（見 probeMaxTokens 註記：實送值受 llm 起跳值約束）。
 			MaxTokens: probeMaxTokens,
@@ -590,13 +602,31 @@ func checkProviders(ctx context.Context, o Options, secrets *[]string) []Check {
 		if err != nil {
 			c.OK = false
 			c.Detail = trunc(err.Error()) // 出口統一遮蔽金鑰（Run 尾端）
+		} else if resp.StopReason == llm.StopRefusal {
+			c.OK = false
+			c.Detail = fmt.Sprintf("模型拒絕連通探測（role=%s，requested_model=%s，actual_model=%s，category=%s）", role, model, resp.Model, resp.RefusalCategory)
+		} else if model != "" && resp.Model != "" && resp.Model != model {
+			c.OK = false
+			c.Detail = fmt.Sprintf("模型路由不一致（role=%s，requested_model=%s，actual_model=%s，stop_reason=%s）", role, model, resp.Model, resp.StopReason)
 		} else {
 			c.OK = true
-			c.Detail = fmt.Sprintf("連通正常（type=%s，model=%s，stop_reason=%s）", p.Type, resp.Model, resp.StopReason)
+			c.Detail = fmt.Sprintf("連通正常（type=%s，role=%s，requested_model=%s，actual_model=%s，stop_reason=%s）", p.Type, role, model, resp.Model, resp.StopReason)
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+func probeModelForProvider(provider string, models map[string]string) (string, string) {
+	for _, role := range []string{settings.RoleRecon, settings.RoleReviewer, settings.RoleTriager, settings.RoleProver, settings.RoleReporter} {
+		ref := models[role]
+		name, id, ok := strings.Cut(ref, "/")
+		if !ok || name != provider || id == "" {
+			continue
+		}
+		return id, role
+	}
+	return "", ""
 }
 
 // newAdapter 依 §3.2 閉集建構 adapter；BaseURL 交由 adapter 注入

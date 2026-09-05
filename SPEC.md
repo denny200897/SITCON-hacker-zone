@@ -29,10 +29,10 @@
 
 | 決策點 | 選擇 |
 |--------|------|
-| 產品形態 | 獨立 CLI（`aegis scan / prove / report`；triage 併入 scan 階段） |
-| 候選來源 | semgrep（高精度候選）+ LLM 獨立自由審查，merge/dedup |
+| 產品形態 | 獨立 CLI；一般入口為 `aegis review`（自動 scan → prove all → replay → report），分段子命令保留給 CI／除錯／續跑；triage 併入 scan 階段 |
+| 候選來源 | LLM 跨語言、跨檔全局自由審查為主要來源；semgrep 為獨立高精度補充來源，最後 merge/dedup。Discovery 不受 proof pack sink 白名單限制 |
 | 漏洞類別 | Injection 家族、SSRF／出網請求、存取控制／認證、XSS／輸出注入（四類全做，依里程碑分波上線） |
-| 語言 | v1 第一包：**Python web**（FastAPI / Flask / Django）；其他語言走 sink pack 擴充介面 |
+| 語言 | Discovery 層支援常見文字型 Web 語言與設定檔；v1 第一個機械 proof pack 為 **Python web**。其他語言的有效 finding 必須保留並標示 proof unsupported，直到相應 sandbox/oracle pack 上線 |
 | 執行環境 | **Docker 強制**：無網路執行、build/run 分離、完整 hardening profile（§7.1） |
 | 使用場景 | 本機掃自己的專案；CI 整合設計上預留、後續里程碑實作 |
 | 模型供應商 | **BYOK**（使用者自帶 API key，**無內建供應商與預設模型**）：`anthropic` 與 `openai-compat` 兩種轉接器；slash 指令互動設定；keychain 儲存 |
@@ -208,6 +208,7 @@ LLMAdapter.chat(role, messages, tools, output_schema?, thinking?, stream?) -> Re
 | `/model list` / `/model set <role\|all> <provider/model-id>` / `/model reset` | 檢視／覆寫角色路由（寫入使用者層級設定）；`role` 給 `all` 時同一引用一次寫入 §3.1 全部五個角色（成本分層的使用者之後仍可逐一覆寫單一角色；`all` 本身不是角色鍵，不得進入 `[models]`）；reset 清空覆寫、回到 repo `aegis.toml` 的定義 |
 | `/status` | 供應商、金鑰狀態、目前路由、Docker 可用性 |
 | `/doctor` | 體檢：Docker、pre-baked 映像檔、供應商連通測試（host 端一次極小呼叫） |
+| `/scan [flags]` / `/prove [F-ID] [flags]` / `/report [flags]` / `/replay [flags]` | 在互動模式執行完整流水線；參數與同名一次性 CLI 相同（含空白值可用單／雙引號） |
 
 **憑證解析優先序**：環境變數 > OS keychain > 設定檔退回。
 
@@ -231,8 +232,8 @@ Inventory ──▶ Candidates ──▶ Triage & ACD ──▶ MVP Synthesis & 
 - 產出 `inventory.json`（快取，供後續所有階段與 prompt caching 使用）。
 
 ### Stage 1 — Candidates（混合來源）
-- **semgrep**：sink pack 內建規則集（高精度、快、幾乎零成本）。
-- **LLM 自由審查**：reviewer 分批讀碼（以 inventory 引導分區），產出結構化候選 `{sink, 疑似漏洞類, 依據}`。
+- **LLM 全局自由審查（主要來源）**：reviewer 先分批讀取跨語言程式碼，再以 inventory + 全部批次候選做第二階段跨檔綜整。產出結構化候選 `{sink, vuln_class, CWE, impact, evidence[], chain[]}`；type 不受目前 proof pack 限制，但每個 evidence 必須能在 snapshot 核對 `file:line`。
+- **semgrep（補充來源）**：sink pack 內建規則集（高精度、快、幾乎零成本），不得作為 LLM 搜尋空間的上限。
 - **Merge/Dedup（確定性）**：依 (file, line±ε, sinkType) 模糊合併（**ε = 5 行**），保留兩側來源標記。兩邊都命中的候選優先級提升。
 
 ### Stage 2 — Triage & ACD
@@ -509,7 +510,8 @@ pack 是有版本契約的模組，每包必附 manifest，core 載入前驗證�
 ## 8. CLI 介面
 
 ```bash
-aegis                         # 無參數 → 互動模式（slash 指令：/provider /key /model /status /doctor）
+aegis                         # 無參數 → 互動模式（設定、狀態與 /review；分段指令供進階使用）
+aegis review [repo]           # 建議入口：自動完成 scan → prove all → replay → report
 aegis console                 # 同上
 aegis scan                    # Stage 0–2：不執行目標 repo 代碼；會執行受信任的 semgrep/core detector
 aegis prove [F-ID]            # Stage 3：對指定 finding（或全部）跑證明迴圈
@@ -883,7 +885,7 @@ run 結束後 orchestrator 以結構化 operator 訊息回饋給 prover session�
 
 ### 18.4 Context 管理
 
-- **reviewer 分批**：以 inventory 的模組／路由為單位切 batch，每批 ≤ 12 檔或 ≤ 80KB 原始碼（先到為準）；每批獨立 session，結束時以結構化輸出回 candidates，由 orchestrator merge（§4 Stage 1）。
+- **reviewer map/reduce 全局審查**：以 inventory 的模組／路由為單位切 batch，每批 ≤ 12 檔或 ≤ 80KB 原始碼（先到為準）；map 階段找局部 sink、信任邊界與資料流，reduce 階段一次讀取 inventory + 全部候選，做跨檔攻擊鏈補強與去重。候選 type 不受 proof pack 白名單限制；所有 evidence 由 core 回查 snapshot path/line 後才可落盤。
 - **prover context**：每個 finding 一個 session；只注入該 finding 的 sink 鄰域（sink 函式 ±200 行、同 module 的呼叫者），**不帶全 repo**；跨 finding 不共用 session。
 - **fresh-eyes**：orchestrator 觸發時開全新 session，只帶 finding 原始資料（sink、chain、triage 理由），不帶任何先前失敗敘事。
 - **prompt 版本化**：各角色 prompt 檔案第一行為 `version:` 宣告（如 `prover/v5`）；載入時記入 evidence `prompt_version` 欄位（§5.3），報告隨附——重跑可比對prompt 變因。

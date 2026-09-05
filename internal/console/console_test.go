@@ -8,8 +8,11 @@ package console
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -312,6 +315,53 @@ func TestUnknownCommandError(t *testing.T) {
 	d, _, _ := newDeps(t)
 	out := run(t, d, "/frobnicate x\nexit\n")
 	assertAll(t, out, "未知指令", "/help")
+}
+
+func TestPipelineCommandsReuseCLIArguments(t *testing.T) {
+	d, _, _ := newDeps(t)
+	var calls [][]string
+	d.RunCommand = func(_ context.Context, args []string, out io.Writer) error {
+		calls = append(calls, append([]string(nil), args...))
+		fmt.Fprintf(out, "%s ok\n", args[0])
+		return nil
+	}
+	out := run(t, d, strings.Join([]string{
+		`/scan --target "repo with spaces"`,
+		`/prove F-0001 --watch`,
+		`/report --run-dir 'out/run 1'`,
+		`/replay --target repo\ copy`,
+		`/scan --target C:\repos\app\`,
+		"exit",
+	}, "\n"))
+	assertAll(t, out, "scan ok", "prove ok", "report ok", "replay ok")
+	want := [][]string{
+		{"scan", "--target", "repo with spaces"},
+		{"prove", "F-0001", "--watch"},
+		{"report", "--run-dir", "out/run 1"},
+		{"replay", "--target", "repo copy"},
+		{"scan", "--target", `C:\repos\app\`},
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+	for i := range want {
+		if !slices.Equal(calls[i], want[i]) {
+			t.Errorf("call[%d] = %#v, want %#v", i, calls[i], want[i])
+		}
+	}
+}
+
+func TestPipelineCommandErrorsDoNotExitREPL(t *testing.T) {
+	d, _, _ := newDeps(t)
+	d.RunCommand = func(_ context.Context, args []string, _ io.Writer) error {
+		return fmt.Errorf("%s failed", args[0])
+	}
+	out := run(t, d, "/scan\n/status\nexit\n")
+	assertAll(t, out, "錯誤：scan failed", "Docker")
+
+	d2, _, _ := newDeps(t)
+	out = run(t, d2, "/scan\n/report --target \"unterminated\nexit\n")
+	assertAll(t, out, "pipeline 指令未接線", "未閉合的引號")
 }
 
 // exitOnExit：輸入 "exit"（與 "quit"）立即結束、Run 回 nil；EOF 亦為 nil（§3.3）。

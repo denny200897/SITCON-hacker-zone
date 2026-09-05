@@ -128,11 +128,18 @@ func sarifResults(findings []Finding) []any {
 			result["locations"] = []any{map[string]any{"physicalLocation": location}}
 		}
 		if reach, ok := f["reachability"].(string); ok {
-			result["properties"] = map[string]any{
+			properties := map[string]any{
 				"aegis.reachability": reach,
 				"aegis.verification": str(f["verification"]),
 				"aegis.severity":     str(f["severity"]),
 			}
+			if supported, exists := f["proof_supported"].(bool); exists {
+				properties["aegis.proof_supported"] = supported
+			}
+			if cwe := str(f["cwe"]); cwe != "" {
+				properties["aegis.cwe"] = cwe
+			}
+			result["properties"] = properties
 		}
 		out = append(out, result)
 	}
@@ -161,8 +168,18 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 	b.WriteString(fmt.Sprintf("> 產出時間：%s　｜　run 目錄：`%s`\n\n", now.Format(time.RFC3339), runDir))
 
 	proven, others := splitByVerification(findings)
+	unsupported := 0
+	for _, finding := range findings {
+		if supported, exists := finding["proof_supported"].(bool); exists && !supported {
+			unsupported++
+		}
+	}
 	b.WriteString("## 執行摘要\n\n")
-	fmt.Fprintf(&b, "- Finding 總數：%d（PROVEN %d）\n\n", len(findings), len(proven))
+	fmt.Fprintf(&b, "- Finding 總數：%d（PROVEN %d；尚無機械 proof 支援 %d）\n\n", len(findings), len(proven), unsupported)
+	writeCoverage(&b, runDir)
+	if len(findings) == 0 {
+		b.WriteString("> 本次沒有候選 finding。這只表示已載入的 pack 與實際執行的 detector／reviewer 在其覆蓋範圍內未命中；不代表已完成全語言、全漏洞類別的 SAST、DAST、合規掃描，也不構成「系統安全」結論。\n\n")
+	}
 
 	if len(proven) > 0 {
 		b.WriteString("## 已證明（PROVEN）\n\n")
@@ -178,6 +195,9 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 	}
 
 	b.WriteString("\n---\n\n## 電子產物\n\n")
+	if _, err := os.Stat(filepath.Join(dir, "coverage.json")); err == nil {
+		b.WriteString("- `coverage.json`（實際 pack／detector／語言覆蓋範圍）\n")
+	}
 	b.WriteString("- `findings.json`（機讀全量）\n- `findings.sarif`（IDE/CI 整合）\n")
 	if st, err := os.Stat(filepath.Join(dir, "guardrails")); err == nil && st.IsDir() {
 		b.WriteString("- `guardrails/`（已驗證絆線）\n")
@@ -191,6 +211,49 @@ func WriteReportMD(dir string, findings []Finding, runDir string, now time.Time)
 		return "", fmt.Errorf("reporting: write report.md: %w", err)
 	}
 	return path, nil
+}
+
+func writeCoverage(b *strings.Builder, runDir string) {
+	data, err := os.ReadFile(filepath.Join(runDir, "coverage.json"))
+	if err != nil {
+		b.WriteString("- 審查覆蓋資訊：未知（run 缺少 `coverage.json`）\n\n")
+		return
+	}
+	var coverage struct {
+		PackID                string   `json:"pack_id"`
+		PackVersion           string   `json:"pack_version"`
+		VerifiableExtensions  []string `json:"verifiable_extensions"`
+		TargetExtensions      []string `json:"target_extensions"`
+		UncoveredExtensions   []string `json:"uncovered_extensions"`
+		DetectorIDs           []string `json:"detector_ids"`
+		ExecutedDetectorIDs   []string `json:"executed_detector_ids"`
+		DetectorNotes         []string `json:"detector_notes"`
+		SinkTypes             []string `json:"sink_types"`
+		LLMReviewerConfigured bool     `json:"llm_reviewer_configured"`
+		DiscoveryMode         string   `json:"discovery_mode"`
+	}
+	if err := json.Unmarshal(data, &coverage); err != nil {
+		b.WriteString("- 審查覆蓋資訊：無法解析 `coverage.json`\n\n")
+		return
+	}
+	fmt.Fprintf(b, "- 實際載入 pack：`%s@%s`\n", coverage.PackID, coverage.PackVersion)
+	fmt.Fprintf(b, "- 候選發現模式：`%s`\n", coverage.DiscoveryMode)
+	fmt.Fprintf(b, "- 可實證原始碼：%s；目標原始碼：%s\n", displayList(coverage.VerifiableExtensions), displayList(coverage.TargetExtensions))
+	fmt.Fprintf(b, "- 已設定 detector：%s；成功執行：%s；候選 sink 類型：%s；LLM reviewer：%t\n", displayList(coverage.DetectorIDs), displayList(coverage.ExecutedDetectorIDs), displayList(coverage.SinkTypes), coverage.LLMReviewerConfigured)
+	for _, note := range coverage.DetectorNotes {
+		fmt.Fprintf(b, "- Detector 降級：%s\n", note)
+	}
+	if len(coverage.UncoveredExtensions) > 0 {
+		fmt.Fprintf(b, "- **尚無機械 proof 的原始碼類型：%s**（LLM reviewer 仍會審查）\n", displayList(coverage.UncoveredExtensions))
+	}
+	b.WriteString("\n")
+}
+
+func displayList(values []string) string {
+	if len(values) == 0 {
+		return "（無）"
+	}
+	return strings.Join(values, ", ")
 }
 
 func splitByVerification(fs []Finding) (proven, others []Finding) {
@@ -210,6 +273,12 @@ func writeFinding(b *strings.Builder, f Finding) {
 	sink := asMap(f["sink"])
 	fmt.Fprintf(b, "### %s — %s（%s / %s）\n\n",
 		str(f["id"]), str(sink["symbol"]), str(f["reachability"]), str(f["verification"]))
+	if supported, exists := f["proof_supported"].(bool); exists && !supported {
+		b.WriteString("**驗證邊界：尚未機械實證。** " + str(f["proof_note"]) + "\n\n")
+	}
+	if cwe := str(f["cwe"]); cwe != "" {
+		fmt.Fprintf(b, "分類：`%s`；CWE：`%s`\n\n", str(sink["type"]), cwe)
+	}
 	if str(f["verification"]) == "PROVEN" && str(f["evidence_id"]) != "" {
 		b.WriteString("重現／重驗：`aegis replay --run-dir <run-dir>`\n\n")
 	}
@@ -227,6 +296,12 @@ func writeFinding(b *strings.Builder, f Finding) {
 
 	b.WriteString("### 現況\n\n")
 	fmt.Fprintf(b, "%s\n\n", str(f["rationale"]))
+	for _, evidence := range strList(f["review_evidence"]) {
+		fmt.Fprintf(b, "- Code review 證據：`%s`\n", evidence)
+	}
+	if len(strList(f["review_evidence"])) > 0 {
+		b.WriteString("\n")
+	}
 	chain := strList(f["chain"])
 	if len(chain) > 0 {
 		b.WriteString("攻擊鏈：" + strings.Join(chain, " → ") + "\n\n")

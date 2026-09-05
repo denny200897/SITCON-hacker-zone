@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,28 +53,132 @@ func main() {
 
 func newRoot() *cobra.Command {
 	root := &cobra.Command{Use: "aegis", Short: "Aegis 程式碼資安審查 Agent Harness", SilenceUsage: true,
-		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return runConsole(cmd.Context()) }}
-	root.AddCommand(newConsole(), newStage("scan", "掃描目標 repo（Stage 0–2）"), newStage("prove", "對 finding 執行證明"), newStage("report", "產生審查報告"), newStage("replay", "離線重驗 evidence bundle"))
+		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+			return runConsole(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
+		}}
+	root.AddCommand(newConsole(), newReview(), newStage("scan", "掃描目標 repo（Stage 0–2）"), newStage("prove", "對 finding 執行證明"), newStage("report", "產生審查報告"), newStage("replay", "離線重驗 evidence bundle"))
 	return root
+}
+
+// newReview 是一般使用者的單一入口。scan/prove/replay/report 仍保留給 CI、
+// 除錯與斷點續跑，但不要求操作者手動搬運 run-dir 或逐段編排。
+func newReview() *cobra.Command {
+	var target, targetSubdir, runDir, packDir string
+	var watch bool
+	var hypotheses int
+	c := &cobra.Command{
+		Use:   "review [repo root]",
+		Short: "自動完成掃描、實證、重驗與報告",
+		Args:  cobra.MaximumNArgs(1),
+	}
+	c.Flags().StringVar(&target, "target", ".", "repo root")
+	c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制審查子樹")
+	c.Flags().StringVar(&runDir, "run-dir", "", "指定新 run 目錄")
+	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
+	c.Flags().BoolVar(&watch, "watch", false, "逐行顯示證明進度")
+	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限")
+	c.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 {
+			if cmd.Flags().Changed("target") {
+				return stageError("review", errors.New("repo root 不可同時使用位置參數與 --target"))
+			}
+			target = args[0]
+		}
+		if hypotheses < 0 {
+			return stageError("review", errors.New("--hypotheses 不可為負數"))
+		}
+		scanRoot := target
+		if targetSubdir != "" {
+			scanRoot = filepath.Join(target, targetSubdir)
+		}
+		if runDir == "" {
+			runDir = filepath.Join(scanRoot, "out", "run-"+time.Now().UTC().Format("20060102-150405.000000000"))
+		}
+
+		run := func(stageArgs ...string) error {
+			root := newRoot()
+			root.SetArgs(stageArgs)
+			root.SetOut(cmd.OutOrStdout())
+			root.SetErr(cmd.ErrOrStderr())
+			root.SilenceErrors = true
+			return root.ExecuteContext(cmd.Context())
+		}
+		scanArgs := []string{"scan", "--target", target, "--run-dir", runDir, "--pack", packDir}
+		if targetSubdir != "" {
+			scanArgs = append(scanArgs, "--target-subdir", targetSubdir)
+		}
+		if err := run(scanArgs...); err != nil {
+			return err
+		}
+
+		data, err := os.ReadFile(filepath.Join(runDir, "findings.json"))
+		if err != nil {
+			return stageError("review", err)
+		}
+		var findings []reporting.Finding
+		if err := decodeJSON(data, &findings); err != nil {
+			return stageError("review", err)
+		}
+		supportedCount := 0
+		for _, finding := range findings {
+			if proofSupported(finding) {
+				supportedCount++
+			}
+		}
+		var verificationErr error
+		if supportedCount > 0 {
+			proveArgs := []string{"prove", "--target", target, "--run-dir", runDir, "--pack", packDir}
+			if targetSubdir != "" {
+				proveArgs = append(proveArgs, "--target-subdir", targetSubdir)
+			}
+			if watch {
+				proveArgs = append(proveArgs, "--watch")
+			}
+			if hypotheses > 0 {
+				proveArgs = append(proveArgs, "--hypotheses", fmt.Sprint(hypotheses))
+			}
+			if err := run(proveArgs...); err != nil {
+				verificationErr = err
+			} else if _, err := os.Stat(filepath.Join(runDir, "evidence")); err == nil {
+				if err := run("replay", "--target", scanRoot, "--run-dir", runDir, "--pack", packDir); err != nil {
+					verificationErr = err
+				}
+			}
+		} else if len(findings) == 0 {
+			fmt.Fprintln(cmd.OutOrStdout(), "沒有候選 finding；略過 prove/replay（這只代表已載入 pack 的覆蓋範圍內未命中）")
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "找到 %d 個 finding，但目前 pack 尚無對應 proof；保留於報告並略過 prove/replay\n", len(findings))
+		}
+		if err := run("report", "--target", scanRoot, "--run-dir", runDir); err != nil {
+			return err
+		}
+		if verificationErr != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "review 已產生失敗狀態報告：%s\n", runDir)
+			return verificationErr
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "review 完成：%s\n", runDir)
+		return nil
+	}
+	return c
 }
 
 func newConsole() *cobra.Command {
 	return &cobra.Command{
 		Use: "console", Short: "進入互動模式",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runConsole(cmd.Context())
+			return runConsole(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
 }
 
-func runConsole(ctx context.Context) error {
+func runConsole(ctx context.Context, in io.Reader, out io.Writer) error {
 	credentialPath, err := credentials.DefaultFilePath()
 	if err != nil {
 		return err
 	}
 	settingsPath := filepath.Join(filepath.Dir(credentialPath), "settings.toml")
 	return console.Run(console.Deps{
-		In: os.Stdin, Out: os.Stdout, UserConfigPath: settingsPath, CredentialsPath: credentialPath,
+		Context: ctx, In: in, Out: out, UserConfigPath: settingsPath, CredentialsPath: credentialPath,
 		Keyring: credentials.NewOSKeyring(), ReadSecret: readSecret,
 		Doctor: func(checkCtx context.Context) []doctor.Check {
 			options, optionErr := defaultDoctorOptions(".", "packs/python-web", settingsPath, credentialPath)
@@ -81,7 +187,19 @@ func runConsole(ctx context.Context) error {
 			}
 			return doctor.Run(checkCtx, options)
 		},
+		RunCommand: runInteractiveCommand,
 	})
+}
+
+// runInteractiveCommand 使用全新的 command tree 執行一次 pipeline，確保每次
+// REPL 呼叫都有乾淨的 flag 狀態，且與一次性 CLI 共用完全相同的實作。
+func runInteractiveCommand(ctx context.Context, args []string, out io.Writer) error {
+	root := newRoot()
+	root.SetArgs(args)
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SilenceErrors = true
+	return root.ExecuteContext(ctx)
 }
 
 func defaultDoctorOptions(repoRoot, packDir, userSettings, credentialPath string) (doctor.Options, error) {
@@ -94,11 +212,17 @@ func defaultDoctorOptions(repoRoot, packDir, userSettings, credentialPath string
 		return doctor.Options{}, err
 	}
 	providers := map[string]settings.Provider{}
+	models := map[string]string{}
 	for name, provider := range user.Providers {
 		providers[name] = provider
 	}
 	for name, provider := range repo.Providers {
 		providers[name] = provider
+	}
+	for _, role := range []string{settings.RoleRecon, settings.RoleReviewer, settings.RoleTriager, settings.RoleProver, settings.RoleReporter} {
+		if ref, _, resolveErr := settings.ResolveModel(repo, user, role); resolveErr == nil {
+			models[role] = ref
+		}
 	}
 	cacheDir, err := aegisCacheDir()
 	if err != nil {
@@ -117,7 +241,7 @@ func defaultDoctorOptions(repoRoot, packDir, userSettings, credentialPath string
 	if err != nil {
 		return doctor.Options{}, err
 	}
-	return doctor.Options{PackDirs: []string{absPack}, SchemasDir: schemasDir, CachePath: filepath.Join(cacheDir, "images.json"), Providers: providers,
+	return doctor.Options{PackDirs: []string{absPack}, SchemasDir: schemasDir, CachePath: filepath.Join(cacheDir, "images.json"), Providers: providers, Models: models,
 		ResolveKey: func(name string) (string, string, error) {
 			provider, ok := providers[name]
 			if !ok {
@@ -146,14 +270,33 @@ func newStage(name, short string) *cobra.Command {
 	var hypotheses int
 	c := &cobra.Command{Use: name, Short: short, Args: cobra.ArbitraryArgs}
 	c.Flags().StringVar(&target, "target", ".", "repo root")
-	c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制掃描子樹")
-	c.Flags().StringVar(&runDir, "run-dir", "", "指定既有 run 目錄（report）")
-	c.Flags().StringVar(&specPath, "spec", "", "WitnessSpec JSON（prove）")
-	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄（prove）")
-	c.Flags().StringArrayVar(&dispositions, "set-disposition", nil, "設定 finding disposition（F-####=OPEN|FALSE_POSITIVE|ACCEPTED_RISK|FIXED）")
-	c.Flags().BoolVar(&watch, "watch", false, "逐行顯示進度")
-	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限（預設讀 [budget]，未設定為 3）")
+	c.Flags().StringVar(&runDir, "run-dir", "", "指定 run 目錄")
+	if name == "scan" || name == "prove" {
+		c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制掃描子樹")
+	}
+	if name == "scan" || name == "prove" || name == "replay" {
+		c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
+	}
+	if name == "prove" {
+		c.Flags().StringVar(&specPath, "spec", "", "WitnessSpec JSON")
+		c.Flags().BoolVar(&watch, "watch", false, "逐行顯示進度")
+		c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限（預設讀 [budget]，未設定為 3）")
+	}
+	if name == "report" {
+		c.Flags().StringArrayVar(&dispositions, "set-disposition", nil, "設定 finding disposition（F-####=OPEN|FALSE_POSITIVE|ACCEPTED_RISK|FIXED）")
+	}
 	c.RunE = func(cmd *cobra.Command, args []string) error {
+		if name != "prove" {
+			if len(args) > 1 {
+				return stageError(name, errors.New("位置參數最多一個（repo root）"))
+			}
+			if len(args) == 1 {
+				if cmd.Flags().Changed("target") {
+					return stageError(name, errors.New("repo root 不可同時使用位置參數與 --target"))
+				}
+				target = args[0]
+			}
+		}
 		if name == "scan" {
 			root := target
 			if targetSubdir != "" {
@@ -182,6 +325,10 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
+			reviewerConfigured := roleConfigured(root, settings.RoleReviewer)
+			if err := ensurePackCoversInventory(pack, inv, reviewerConfigured); err != nil {
+				return stageError(name, err)
+			}
 			if runDir == "" {
 				outDir := filepath.Join(root, "out")
 				if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -205,6 +352,10 @@ func newStage(name, short string) *cobra.Command {
 			if _, err := j.Append("snapshot_created", "", map[string]any{"snapshot_id": snap.ID, "tree_hash": snap.TreeHash}); err != nil {
 				return stageError(name, err)
 			}
+			coverage := packCoverage(pack, inv, reviewerConfigured)
+			if len(coverage.UncoveredExtensions) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "提示：LLM 仍會審查，但 pack %s 不可機械實證部分原始碼類型：%s\n", coverage.PackID, strings.Join(coverage.UncoveredExtensions, ", "))
+			}
 			data, err := json.MarshalIndent(inv, "", "  ")
 			if err != nil {
 				return stageError(name, err)
@@ -218,15 +369,41 @@ func newStage(name, short string) *cobra.Command {
 			var detectorResults [][]candidates.Candidate
 			if len(pack.Manifest.Detectors) > 0 {
 				if _, err := exec.LookPath("semgrep"); err != nil {
-					return stageError(name, fmt.Errorf("找不到 semgrep：%w", err))
-				}
-				for _, det := range pack.Manifest.Detectors {
-					group, runErr := candidates.Run(cmd.Context(), snap.Dir, filepath.Join(packDir, det.Path), det.ID, "semgrep")
-					if runErr != nil {
-						return stageError(name, runErr)
+					if !reviewerConfigured {
+						return stageError(name, fmt.Errorf("找不到 semgrep，且未設定 reviewer 可接手：%w", err))
 					}
-					detectorResults = append(detectorResults, group)
+					coverage.DetectorNotes = append(coverage.DetectorNotes, "semgrep unavailable; LLM fallback used")
+					fmt.Fprintln(cmd.OutOrStdout(), "警告：找不到 semgrep；改由 LLM 全局審查繼續")
+				} else {
+					for _, det := range pack.Manifest.Detectors {
+						group, runErr := candidates.Run(cmd.Context(), snap.Dir, filepath.Join(packDir, det.Path), det.ID, "semgrep")
+						if runErr != nil {
+							if !reviewerConfigured {
+								return stageError(name, runErr)
+							}
+							coverage.DetectorNotes = append(coverage.DetectorNotes, det.ID+": execution failed; LLM fallback used")
+							fmt.Fprintf(cmd.OutOrStdout(), "警告：detector %s 失敗；LLM 全局審查仍繼續\n", det.ID)
+							continue
+						}
+						coverage.ExecutedDetectorIDs = append(coverage.ExecutedDetectorIDs, det.ID)
+						detectorResults = append(detectorResults, group)
+					}
 				}
+			}
+			coverageData, err := json.MarshalIndent(coverage, "", "  ")
+			if err != nil {
+				return stageError(name, err)
+			}
+			if err := redaction.WriteFile(filepath.Join(runDir, "coverage.json"), append(coverageData, '\n'), 0o644); err != nil {
+				return stageError(name, err)
+			}
+			if reviewerConfigured {
+				llmCandidates, reviewErr := runLLMScan(cmd.Context(), root, snap.Dir, inv, pack)
+				if reviewErr != nil {
+					return stageError(name, reviewErr)
+				}
+				detectorResults = append(detectorResults, llmCandidates)
+				fmt.Fprintf(cmd.OutOrStdout(), "LLM recon/reviewer 審查完成：新增 %d 個 candidate\n", len(llmCandidates))
 			}
 			cs := candidates.Merge(detectorResults...)
 			cb, err := json.MarshalIndent(cs, "", "  ")
@@ -252,16 +429,41 @@ func newStage(name, short string) *cobra.Command {
 					return stageError(name, err)
 				}
 				t := triage.EvaluateAt(c, inv, snap.Dir)
+				if roleConfigured(root, settings.RoleTriager) {
+					comment, triageErr := runLLMTriage(cmd.Context(), root, c, t)
+					if triageErr != nil {
+						return stageError(name, fmt.Errorf("triager 失敗：%w", triageErr))
+					}
+					t.Rationale += "；LLM triager：" + strings.TrimSpace(comment)
+					fmt.Fprintf(cmd.OutOrStdout(), "LLM triager 審查完成：%s\n", c.ID)
+				}
 				triages = append(triages, t)
 				sources := make([]any, 0, len(c.Sources))
 				for _, source := range c.Sources {
 					sources = append(sources, map[string]any{"origin": source.Origin, "rule": source.Rule})
 				}
-				impact, ok := pack.Impact(c.Sink.Type)
-				if !ok {
-					return stageError(name, fmt.Errorf("pack %s 未定義 sink type %q 的 impact；拒絕由 core 猜測", pack.Manifest.PackID, c.Sink.Type))
+				impact, _ := pack.Impact(c.Sink.Type)
+				proofSupported := packCanProve(pack, c.Sink.Type)
+				if !proofSupported {
+					impact = c.Impact
+					if impact != "high" && impact != "medium" && impact != "low" {
+						impact = impactForPriority(c.PriorityHint)
+					}
 				}
-				f := reporting.Finding{"id": fid, "sink": map[string]any{"file": c.Sink.File, "line": c.Sink.Line, "symbol": c.Sink.Symbol, "type": c.Sink.Type}, "sources": sources, "reachability": t.Reachability, "verification": "NOT_RUN", "disposition": "OPEN", "snapshot_id": snap.ID, "severity": triage.Severity(impact, t.Reachability), "confidence": triage.Confidence("NOT_RUN", t.Mode, 0, 0), "rationale": t.Rationale}
+				proofNote := fmt.Sprintf("pack %s@%s 可執行此類型的 sandbox/oracle proof", pack.Manifest.PackID, pack.Manifest.Version)
+				if !proofSupported {
+					proofNote = fmt.Sprintf("已由全局 code review 發現，但 pack %s@%s 尚無 %s 的 sandbox/oracle；保留 finding，不宣稱已實證", pack.Manifest.PackID, pack.Manifest.Version, c.Sink.Type)
+				}
+				f := reporting.Finding{"id": fid, "sink": map[string]any{"file": c.Sink.File, "line": c.Sink.Line, "symbol": c.Sink.Symbol, "type": c.Sink.Type}, "sources": sources, "reachability": t.Reachability, "verification": "NOT_RUN", "proof_supported": proofSupported, "proof_note": proofNote, "disposition": "OPEN", "snapshot_id": snap.ID, "severity": triage.Severity(impact, t.Reachability), "confidence": triage.Confidence("NOT_RUN", t.Mode, 0, 0), "rationale": c.Rationale + "；可達性判定：" + t.Rationale}
+				if c.CWE != "" {
+					f["cwe"] = c.CWE
+				}
+				if len(c.Evidence) > 0 {
+					f["review_evidence"] = c.Evidence
+				}
+				if len(c.Chain) > 0 {
+					f["chain"] = c.Chain
+				}
 				if t.Mode != "" {
 					f["mode"] = t.Mode
 				}
@@ -370,6 +572,15 @@ func newStage(name, short string) *cobra.Command {
 			if err != nil {
 				return stageError(name, err)
 			}
+			// 空 findings 不交給模型自由發揮。沒有逐項證據時，模型很容易
+			// 杜撰未執行的 SAST/DAST/合規方法，確定性模板才是可信輸出。
+			if len(findings) > 0 && roleConfigured(target, settings.RoleReporter) {
+				path, err = writeLLMReport(cmd.Context(), target, runDir, findings)
+				if err != nil {
+					return stageError(name, fmt.Errorf("reporter 失敗：%w", err))
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), "LLM reporter 撰寫完成")
+			}
 			if _, err := j.Append("report_written", "", map[string]any{"artifacts": []string{"findings.json", "findings.sarif", "report.md"}}); err != nil {
 				return stageError(name, err)
 			}
@@ -473,13 +684,19 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	}
 	selected := make([]reporting.Finding, 0, len(findings))
 	for _, finding := range findings {
-		if len(args) == 0 || finding["id"] == args[0] {
+		matches := len(args) == 0 || finding["id"] == args[0]
+		if matches && proofSupported(finding) {
 			selected = append(selected, finding)
 		}
 	}
 	if len(selected) == 0 {
 		if len(args) == 0 {
-			return stageError("prove", errors.New("此 run 沒有可證明的 finding"))
+			return stageError("prove", errors.New("此 run 沒有目前 pack 可機械實證的 finding；未支援項目仍保留於報告"))
+		}
+		for _, finding := range findings {
+			if finding["id"] == args[0] && !proofSupported(finding) {
+				return stageError("prove", fmt.Errorf("finding %s 的類型 %s 尚無 sandbox/oracle proof 支援", args[0], stringValue(mapValue(finding["sink"])["type"])))
+			}
 		}
 		return stageError("prove", fmt.Errorf("finding %s 不存在於此 run", args[0]))
 	}
@@ -649,6 +866,39 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "產物：%s\n", opts.runDir)
 	return nil
+}
+
+func proofSupported(finding reporting.Finding) bool {
+	value, exists := finding["proof_supported"]
+	if !exists {
+		return true // 舊 run 在引入此欄位前全部來自 pack。
+	}
+	supported, _ := value.(bool)
+	return supported
+}
+
+func packCanProve(pack *packs.Pack, sinkType string) bool {
+	if _, ok := pack.Impact(sinkType); !ok {
+		return false
+	}
+	family := ""
+	for _, sink := range pack.Manifest.SinkTypes {
+		if sink.Type == sinkType {
+			family = sink.Family
+			break
+		}
+	}
+	if family == "" {
+		return false
+	}
+	hasTemplate, hasOracle := false, false
+	for _, tmpl := range pack.Manifest.Templates {
+		hasTemplate = hasTemplate || tmpl.Family == family
+	}
+	for _, oracle := range pack.Manifest.Oracles {
+		hasOracle = hasOracle || oracle.Family == family && oracle.Touch != nil
+	}
+	return hasTemplate && hasOracle
 }
 
 func proverAdapter(repoRoot string) (llm.Adapter, string, error) {
@@ -887,6 +1137,111 @@ func validateSchema(name string, value any) error {
 }
 
 func findingID(candidateID string) string { return "F-" + strings.TrimPrefix(candidateID, "C-") }
+
+// ensurePackCoversInventory prevents a successful-looking zero-result run when
+// the selected proof pack cannot execute any source file in the target repo.
+// allowed_files is part of the trusted pack ABI and therefore a stronger
+// compatibility signal than a pack name convention such as "python-web".
+func ensurePackCoversInventory(pack *packs.Pack, inv *inventory.Inventory, reviewerConfigured bool) error {
+	coverage := packCoverage(pack, inv, reviewerConfigured)
+	allowed := stringSliceMap(coverage.VerifiableExtensions)
+	if len(allowed) == 0 {
+		return fmt.Errorf("pack %q 未宣告任何可驗證的原始碼副檔名", pack.Manifest.PackID)
+	}
+	if len(coverage.MatchedExtensions) > 0 {
+		return nil
+	}
+	if reviewerConfigured {
+		return nil
+	}
+	return fmt.Errorf("覆蓋範圍為零：pack %q 只能實證 %s，但目標原始碼為 %s；拒絕產生『0 弱點』報告，請安裝相符的 pack",
+		pack.Manifest.PackID, sortedMapKeys(allowed), strings.Join(coverage.TargetExtensions, ", "))
+}
+
+type coverageRecord struct {
+	PackID                string   `json:"pack_id"`
+	PackVersion           string   `json:"pack_version"`
+	VerifiableExtensions  []string `json:"verifiable_extensions"`
+	TargetExtensions      []string `json:"target_extensions"`
+	MatchedExtensions     []string `json:"matched_extensions"`
+	UncoveredExtensions   []string `json:"uncovered_extensions,omitempty"`
+	DetectorIDs           []string `json:"detector_ids"`
+	ExecutedDetectorIDs   []string `json:"executed_detector_ids"`
+	DetectorNotes         []string `json:"detector_notes,omitempty"`
+	SinkTypes             []string `json:"sink_types"`
+	LLMReviewerConfigured bool     `json:"llm_reviewer_configured"`
+	DiscoveryMode         string   `json:"discovery_mode"`
+}
+
+func packCoverage(pack *packs.Pack, inv *inventory.Inventory, reviewer bool) coverageRecord {
+	allowed, target := map[string]bool{}, map[string]bool{}
+	for _, tmpl := range pack.Manifest.Templates {
+		for _, ext := range tmpl.AllowedFiles {
+			allowed[strings.ToLower(ext)] = true
+		}
+	}
+	for _, file := range inv.Files {
+		if file.Language == "other" || file.Language == "toml" || file.Language == "go-module" {
+			continue
+		}
+		if ext := strings.ToLower(filepath.Ext(file.Path)); ext != "" {
+			target[ext] = true
+		}
+	}
+	matched, uncovered := map[string]bool{}, map[string]bool{}
+	for ext := range target {
+		if allowed[ext] {
+			matched[ext] = true
+		} else {
+			uncovered[ext] = true
+		}
+	}
+	record := coverageRecord{PackID: pack.Manifest.PackID, PackVersion: pack.Manifest.Version,
+		VerifiableExtensions: stringsToSortedSlice(allowed), TargetExtensions: stringsToSortedSlice(target),
+		MatchedExtensions: stringsToSortedSlice(matched), UncoveredExtensions: stringsToSortedSlice(uncovered),
+		LLMReviewerConfigured: reviewer, DiscoveryMode: "detectors-only"}
+	if reviewer {
+		record.DiscoveryMode = "llm-global-review+detectors"
+	}
+	for _, detector := range pack.Manifest.Detectors {
+		record.DetectorIDs = append(record.DetectorIDs, detector.ID)
+	}
+	for _, sink := range pack.Manifest.SinkTypes {
+		record.SinkTypes = append(record.SinkTypes, sink.Type)
+	}
+	sort.Strings(record.DetectorIDs)
+	sort.Strings(record.SinkTypes)
+	return record
+}
+
+func stringSliceMap(values []string) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		out[value] = true
+	}
+	return out
+}
+
+func stringsToSortedSlice(values map[string]bool) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedMapKeys(values map[string]bool) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return "（無可辨識副檔名）"
+	}
+	return strings.Join(keys, ", ")
+}
 
 func latestRunDir(root string) string {
 	entries, err := os.ReadDir(filepath.Join(root, "out"))

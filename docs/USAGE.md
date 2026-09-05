@@ -78,9 +78,11 @@ LLM reviewer 採兩階段全局審查：先分批讀取跨語言原始碼與設�
 
 Reviewer 本身以唯讀 agent tool loop 運作：先取得 inventory 與分批檔名，再自行呼叫
 `read_code`、`search_code`、`semgrep` 探索實際程式碼。每組工具呼叫前，模型被要求
-輸出一段可公開的 investigation commentary；TUI 以 `💭` 顯示 commentary，並以
-`→`／`←` 顯示真實工具參數與結果摘要。這些是供應商實際回傳的公開說明，不是偽造
-或揭露供應商未提供的隱藏 chain-of-thought。
+輸出一段可公開的 investigation commentary；watch 串流以 Claude 風格呈現——`💭`
+標示模型的思考(commentary，獨立縮排區塊)、`⏺ tool 參數` 配對下一行 `⎿ 結果摘要`、
+`● phase` 作為分節標題。這些是供應商實際回傳的公開說明，不是偽造或揭露供應商
+未提供的隱藏 chain-of-thought。純記帳的事件(送出的 payload 位元組數、token 用量)
+不進 watch 串流，只保留在 run 目錄的 `ai-events.jsonl`。
 
 inventory 目前辨識 Python、Go、JavaScript/TypeScript、Java/Kotlin、PHP、Ruby、
 C#、Rust、Scala、Vue、Svelte，以及常見 markup、設定檔、shell 與 Dockerfile。

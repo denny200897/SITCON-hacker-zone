@@ -53,11 +53,11 @@ func main() {
 }
 
 func newRoot() *cobra.Command {
-	root := &cobra.Command{Use: "aegis", Short: "Aegis 程式碼資安審查 Agent Harness", SilenceUsage: true,
+	root := &cobra.Command{Use: "aegis", Short: "Aegis code security review agent harness", SilenceUsage: true,
 		Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 			return runConsole(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		}}
-	root.AddCommand(newConsole(), newReview(), newStage("scan", "掃描目標 repo（Stage 0–2）"), newStage("prove", "對 finding 執行證明"), newStage("report", "產生審查報告"), newStage("replay", "離線重驗 evidence bundle"))
+	root.AddCommand(newConsole(), newReview(), newStage("scan", "scan the target repo (Stage 0-2)"), newStage("prove", "run proofs against findings"), newStage("report", "generate the review report"), newStage("replay", "revalidate an evidence bundle offline"))
 	return root
 }
 
@@ -69,24 +69,24 @@ func newReview() *cobra.Command {
 	var hypotheses int
 	c := &cobra.Command{
 		Use:   "review [repo root]",
-		Short: "自動完成掃描、實證、重驗與報告",
+		Short: "scan, prove, replay, and report in one command",
 		Args:  cobra.MaximumNArgs(1),
 	}
 	c.Flags().StringVar(&target, "target", ".", "repo root")
-	c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制審查子樹")
-	c.Flags().StringVar(&runDir, "run-dir", "", "指定新 run 目錄")
-	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
-	c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 工作流程、回覆摘要與工具活動")
-	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限")
+	c.Flags().StringVar(&targetSubdir, "target-subdir", "", "limit review to a subtree")
+	c.Flags().StringVar(&runDir, "run-dir", "", "use a specific new run directory")
+	c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack directory")
+	c.Flags().BoolVar(&watch, "watch", false, "show the AI workflow, response summaries, and tool activity")
+	c.Flags().IntVar(&hypotheses, "hypotheses", 0, "override the hypothesis limit")
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
 			if cmd.Flags().Changed("target") {
-				return stageError("review", errors.New("repo root 不可同時使用位置參數與 --target"))
+				return stageError("review", errors.New("repo root cannot use both a positional argument and --target"))
 			}
 			target = args[0]
 		}
 		if hypotheses < 0 {
-			return stageError("review", errors.New("--hypotheses 不可為負數"))
+			return stageError("review", errors.New("--hypotheses must not be negative"))
 		}
 		scanRoot := target
 		if targetSubdir != "" {
@@ -188,7 +188,7 @@ func newReview() *cobra.Command {
 
 func newConsole() *cobra.Command {
 	return &cobra.Command{
-		Use: "console", Short: "進入互動模式",
+		Use: "console", Short: "enter interactive mode",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runConsole(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout())
 		},
@@ -286,7 +286,7 @@ func defaultDoctorOptions(repoRoot, packDir, userSettings, credentialPath string
 func readSecret(prompt string) ([]byte, error) {
 	fmt.Fprint(os.Stdout, prompt)
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return nil, errors.New("stdin 不是終端機，無法隱藏輸入")
+		return nil, errors.New("stdin is not a terminal, cannot hide input")
 	}
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stdout)
@@ -302,31 +302,31 @@ func newStage(name, short string) *cobra.Command {
 	var hypotheses int
 	c := &cobra.Command{Use: name, Short: short, Args: cobra.ArbitraryArgs}
 	c.Flags().StringVar(&target, "target", ".", "repo root")
-	c.Flags().StringVar(&runDir, "run-dir", "", "指定 run 目錄")
+	c.Flags().StringVar(&runDir, "run-dir", "", "use a specific run directory")
 	if name == "scan" || name == "prove" {
-		c.Flags().StringVar(&targetSubdir, "target-subdir", "", "限制掃描子樹")
+		c.Flags().StringVar(&targetSubdir, "target-subdir", "", "limit the scan to a subtree")
 	}
 	if name == "scan" || name == "prove" || name == "replay" {
-		c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack 目錄")
+		c.Flags().StringVar(&packDir, "pack", "packs/python-web", "pack directory")
 	}
 	if name == "scan" || name == "prove" || name == "report" {
-		c.Flags().BoolVar(&watch, "watch", false, "顯示 AI 工作流程、回覆摘要與工具活動")
+		c.Flags().BoolVar(&watch, "watch", false, "show the AI workflow, response summaries, and tool activity")
 	}
 	if name == "prove" {
 		c.Flags().StringVar(&specPath, "spec", "", "WitnessSpec JSON")
-		c.Flags().IntVar(&hypotheses, "hypotheses", 0, "覆寫假設上限（預設讀 [budget]，未設定為 3）")
+		c.Flags().IntVar(&hypotheses, "hypotheses", 0, "override the hypothesis limit (defaults to [budget], or 3 if unset)")
 	}
 	if name == "report" {
-		c.Flags().StringArrayVar(&dispositions, "set-disposition", nil, "設定 finding disposition（F-####=OPEN|FALSE_POSITIVE|ACCEPTED_RISK|FIXED）")
+		c.Flags().StringArrayVar(&dispositions, "set-disposition", nil, "set a finding disposition (F-####=OPEN|FALSE_POSITIVE|ACCEPTED_RISK|FIXED)")
 	}
 	c.RunE = func(cmd *cobra.Command, args []string) error {
 		if name != "prove" {
 			if len(args) > 1 {
-				return stageError(name, errors.New("位置參數最多一個（repo root）"))
+				return stageError(name, errors.New("at most one positional argument (repo root)"))
 			}
 			if len(args) == 1 {
 				if cmd.Flags().Changed("target") {
-					return stageError(name, errors.New("repo root 不可同時使用位置參數與 --target"))
+					return stageError(name, errors.New("repo root cannot use both a positional argument and --target"))
 				}
 				target = args[0]
 			}
@@ -379,7 +379,7 @@ func newStage(name, short string) *cobra.Command {
 				}
 				runDir = filepath.Join(outDir, "run-"+time.Now().UTC().Format("20060102-150405.000000000"))
 				if err := os.Mkdir(runDir, 0o755); err != nil {
-					return stageError(name, fmt.Errorf("建立唯一 run 目錄：%w", err))
+					return stageError(name, fmt.Errorf("creating unique run directory: %w", err))
 				}
 			} else if err := os.MkdirAll(runDir, 0o755); err != nil {
 				return stageError(name, err)
@@ -403,7 +403,7 @@ func newStage(name, short string) *cobra.Command {
 			}
 			coverage := packCoverage(pack, inv, reviewerConfigured)
 			if len(coverage.UncoveredExtensions) > 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "提示：LLM discovery 仍會審查 %s；目前 proof runtime %s@%s 只接受 %s，無法執行這些語言的 witness。Semgrep detector 只是候選來源，不是此限制的原因。\n",
+				fmt.Fprintf(cmd.OutOrStdout(), "note: LLM discovery still reviews %s; the current proof runtime %s@%s only accepts %s and cannot run witnesses for these languages. The Semgrep detector is only a candidate source, not the cause of this limit.\n",
 					strings.Join(coverage.UncoveredExtensions, ", "), coverage.PackID, coverage.PackVersion, displayCLIList(coverage.ProofRuntimeExtensions))
 			}
 			data, err := json.MarshalIndent(inv, "", "  ")
@@ -423,10 +423,10 @@ func newStage(name, short string) *cobra.Command {
 				}
 				if _, err := exec.LookPath("semgrep"); err != nil {
 					if !reviewerConfigured {
-						return stageError(name, fmt.Errorf("找不到 semgrep，且未設定 reviewer 可接手：%w", err))
+						return stageError(name, fmt.Errorf("semgrep not found and no reviewer configured to take over: %w", err))
 					}
 					coverage.DetectorNotes = append(coverage.DetectorNotes, "semgrep unavailable; LLM fallback used")
-					fmt.Fprintln(cmd.OutOrStdout(), "警告：找不到 semgrep；改由 LLM 全局審查繼續")
+					fmt.Fprintln(cmd.OutOrStdout(), "warning: semgrep not found; continuing with LLM global review")
 				} else {
 					for _, det := range pack.Manifest.Detectors {
 						group, runErr := candidates.Run(cmd.Context(), snap.Dir, filepath.Join(packDir, det.Path), det.ID, "semgrep")
@@ -435,7 +435,7 @@ func newStage(name, short string) *cobra.Command {
 								return stageError(name, runErr)
 							}
 							coverage.DetectorNotes = append(coverage.DetectorNotes, det.ID+": execution failed; LLM fallback used")
-							fmt.Fprintf(cmd.OutOrStdout(), "警告：detector %s 失敗；LLM 全局審查仍繼續\n", det.ID)
+							fmt.Fprintf(cmd.OutOrStdout(), "warning: detector %s failed; LLM global review continues\n", det.ID)
 							continue
 						}
 						coverage.ExecutedDetectorIDs = append(coverage.ExecutedDetectorIDs, det.ID)
@@ -459,7 +459,7 @@ func newStage(name, short string) *cobra.Command {
 					return stageError(name, reviewErr)
 				}
 				detectorResults = append(detectorResults, llmCandidates)
-				fmt.Fprintf(cmd.OutOrStdout(), "LLM recon/reviewer 審查完成：新增 %d 個 candidate\n", len(llmCandidates))
+				fmt.Fprintf(cmd.OutOrStdout(), "LLM recon/reviewer review complete: added %d candidate(s)\n", len(llmCandidates))
 			}
 			cs := candidates.Merge(detectorResults...)
 			cb, err := json.MarshalIndent(cs, "", "  ")
@@ -488,10 +488,10 @@ func newStage(name, short string) *cobra.Command {
 				if roleConfigured(root, settings.RoleTriager) {
 					comment, triageErr := runLLMTriage(scanCtx, root, c, t)
 					if triageErr != nil {
-						return stageError(name, fmt.Errorf("triager 失敗：%w", triageErr))
+						return stageError(name, fmt.Errorf("triager failed: %w", triageErr))
 					}
 					t.Rationale += "；LLM triager：" + strings.TrimSpace(comment)
-					fmt.Fprintf(cmd.OutOrStdout(), "LLM triager 審查完成：%s\n", c.ID)
+					fmt.Fprintf(cmd.OutOrStdout(), "LLM triager review complete: %s\n", c.ID)
 				}
 				triages = append(triages, t)
 				sources := make([]any, 0, len(c.Sources))
@@ -506,11 +506,11 @@ func newStage(name, short string) *cobra.Command {
 						impact = impactForPriority(c.PriorityHint)
 					}
 				}
-				proofNote := fmt.Sprintf("pack %s@%s 可執行此類型的 sandbox/oracle proof", pack.Manifest.PackID, pack.Manifest.Version)
+				proofNote := fmt.Sprintf("pack %s@%s can run a sandbox/oracle proof for this type", pack.Manifest.PackID, pack.Manifest.Version)
 				if !proofSupported {
-					proofNote = fmt.Sprintf("已由全局 code review 發現，但 pack %s@%s 尚無 %s 的 sandbox/oracle；保留 finding，不宣稱已實證", pack.Manifest.PackID, pack.Manifest.Version, c.Sink.Type)
+					proofNote = fmt.Sprintf("found by global code review, but pack %s@%s has no sandbox/oracle for %s; the finding is kept and not claimed as proven", pack.Manifest.PackID, pack.Manifest.Version, c.Sink.Type)
 				}
-				f := reporting.Finding{"id": fid, "sink": map[string]any{"file": c.Sink.File, "line": c.Sink.Line, "symbol": c.Sink.Symbol, "type": c.Sink.Type}, "sources": sources, "reachability": t.Reachability, "verification": "NOT_RUN", "proof_supported": proofSupported, "proof_note": proofNote, "disposition": "OPEN", "snapshot_id": snap.ID, "severity": triage.Severity(impact, t.Reachability), "confidence": triage.Confidence("NOT_RUN", t.Mode, 0, 0), "rationale": c.Rationale + "；可達性判定：" + t.Rationale}
+				f := reporting.Finding{"id": fid, "sink": map[string]any{"file": c.Sink.File, "line": c.Sink.Line, "symbol": c.Sink.Symbol, "type": c.Sink.Type}, "sources": sources, "reachability": t.Reachability, "verification": "NOT_RUN", "proof_supported": proofSupported, "proof_note": proofNote, "disposition": "OPEN", "snapshot_id": snap.ID, "severity": triage.Severity(impact, t.Reachability), "confidence": triage.Confidence("NOT_RUN", t.Mode, 0, 0), "rationale": c.Rationale + "; reachability: " + t.Rationale}
 				if c.CWE != "" {
 					f["cwe"] = c.CWE
 				}
@@ -573,7 +573,7 @@ func newStage(name, short string) *cobra.Command {
 			if err := redaction.WriteFile(filepath.Join(runDir, "findings.json"), append(fb, '\n'), 0o644); err != nil {
 				return stageError(name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "scan 完成：%d 個檔案、%d 個入口、%d 個 candidate\n產物：%s\n", len(inv.Files), len(inv.Entrypoints), len(cs), runDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "scan complete: %d file(s), %d entrypoint(s), %d candidate(s)\nartifacts: %s\n", len(inv.Files), len(inv.Entrypoints), len(cs), runDir)
 			return nil
 		}
 		if name == "report" {
@@ -581,7 +581,7 @@ func newStage(name, short string) *cobra.Command {
 				runDir = latestRunDir(target)
 			}
 			if runDir == "" {
-				return stageError(name, errors.New("找不到可報告的 run 目錄，請先執行 aegis scan"))
+				return stageError(name, errors.New("no run directory to report on; run aegis scan first"))
 			}
 			findings := []reporting.Finding{}
 			if data, err := os.ReadFile(filepath.Join(runDir, "findings.json")); err == nil {
@@ -593,7 +593,7 @@ func newStage(name, short string) *cobra.Command {
 				for _, item := range dispositions {
 					parts := strings.SplitN(item, "=", 2)
 					if len(parts) != 2 || !validDisposition(parts[1]) {
-						return stageError(name, fmt.Errorf("無效 disposition %q", item))
+						return stageError(name, fmt.Errorf("invalid disposition %q", item))
 					}
 					found := false
 					for _, f := range findings {
@@ -603,7 +603,7 @@ func newStage(name, short string) *cobra.Command {
 						}
 					}
 					if !found {
-						return stageError(name, fmt.Errorf("找不到 finding %s", parts[0]))
+						return stageError(name, fmt.Errorf("finding %s not found", parts[0]))
 					}
 				}
 			}
@@ -638,14 +638,14 @@ func newStage(name, short string) *cobra.Command {
 				defer trace.Close()
 				path, err = writeLLMReport(withAITrace(cmd.Context(), trace, "report"), target, runDir, findings)
 				if err != nil {
-					return stageError(name, fmt.Errorf("reporter 失敗：%w", err))
+					return stageError(name, fmt.Errorf("reporter failed: %w", err))
 				}
-				fmt.Fprintln(cmd.OutOrStdout(), "LLM reporter 撰寫完成")
+				fmt.Fprintln(cmd.OutOrStdout(), "LLM reporter finished writing")
 			}
 			if _, err := j.Append("report_written", "", map[string]any{"artifacts": []string{"findings.json", "findings.sarif", "report.md"}}); err != nil {
 				return stageError(name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "report 完成：%s\n", path)
+			fmt.Fprintf(cmd.OutOrStdout(), "report complete: %s\n", path)
 			return nil
 		}
 		if name == "replay" {
@@ -653,7 +653,7 @@ func newStage(name, short string) *cobra.Command {
 				runDir = latestRunDir(target)
 			}
 			if runDir == "" {
-				return stageError(name, errors.New("找不到 run 目錄"))
+				return stageError(name, errors.New("run directory not found"))
 			}
 			cacheDir, cacheErr := aegisCacheDir()
 			if cacheErr != nil {
@@ -670,7 +670,7 @@ func newStage(name, short string) *cobra.Command {
 			if err := orchestrator.ReplayBundle(pack, runDir); err != nil {
 				return stageError(name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "replay 驗證通過：%s\n", runDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "replay verification passed: %s\n", runDir)
 			return nil
 		}
 		if name == "prove" {
@@ -680,7 +680,7 @@ func newStage(name, short string) *cobra.Command {
 		_ = args
 		_ = watch
 		_ = hypotheses
-		return stageError(name, fmt.Errorf("%s pipeline 尚未接線（請先完成 scan 的 run 產物）", name))
+		return stageError(name, fmt.Errorf("%s pipeline not wired (produce scan run artifacts first)", name))
 	}
 	return c
 }
@@ -693,13 +693,13 @@ type proveOptions struct {
 
 func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error {
 	if len(args) > 1 {
-		return stageError("prove", errors.New("finding ID 最多一個；省略時依序證明此 run 的全部 findings"))
+		return stageError("prove", errors.New("at most one finding ID; omit it to prove all findings in this run in order"))
 	}
 	if opts.specPath != "" && len(args) != 1 {
-		return stageError("prove", errors.New("離線 --spec 模式必須指定恰好一個 finding ID"))
+		return stageError("prove", errors.New("offline --spec mode requires exactly one finding ID"))
 	}
 	if opts.hypotheses < 0 {
-		return stageError("prove", errors.New("--hypotheses 必須至少為 1"))
+		return stageError("prove", errors.New("--hypotheses must be at least 1"))
 	}
 	scanRoot := opts.target
 	if opts.targetSubdir != "" {
@@ -709,7 +709,7 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 		opts.runDir = latestRunDir(scanRoot)
 	}
 	if opts.runDir == "" {
-		return stageError("prove", errors.New("找不到 scan run；請先執行 aegis scan"))
+		return stageError("prove", errors.New("no scan run found; run aegis scan first"))
 	}
 
 	cacheDir, err := aegisCacheDir()
@@ -752,14 +752,14 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	}
 	if len(selected) == 0 {
 		if len(args) == 0 {
-			return stageError("prove", errors.New("此 run 沒有目前 pack 可機械實證的 finding；未支援項目仍保留於報告"))
+			return stageError("prove", errors.New("this run has no finding the current pack can mechanically prove; unsupported items remain in the report"))
 		}
 		for _, finding := range findings {
 			if finding["id"] == args[0] && !proofSupported(finding) {
-				return stageError("prove", fmt.Errorf("finding %s 的類型 %s 尚無 sandbox/oracle proof 支援", args[0], stringValue(mapValue(finding["sink"])["type"])))
+				return stageError("prove", fmt.Errorf("finding %s of type %s has no sandbox/oracle proof support yet", args[0], stringValue(mapValue(finding["sink"])["type"])))
 			}
 		}
-		return stageError("prove", fmt.Errorf("finding %s 不存在於此 run", args[0]))
+		return stageError("prove", fmt.Errorf("finding %s does not exist in this run", args[0]))
 	}
 
 	j, err := journal.Open(filepath.Join(opts.runDir, "journal.sqlite"))
@@ -777,7 +777,7 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	}
 	helper, ok := pack.Manifest.Images["helper/alpine"]
 	if !ok {
-		return stageError("prove", errors.New("pack 缺 helper/alpine digest"))
+		return stageError("prove", errors.New("pack is missing the helper/alpine digest"))
 	}
 	imageCachePath := filepath.Join(cacheDir, "images.json")
 
@@ -817,8 +817,8 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 			return stageError("prove", readErr)
 		}
 		toolDefs, err = agent.NewToolDefs(llm.RoleProver, toolsSchema, specSchema, map[string]string{
-			"read_code": "讀取 snapshot 內指定檔案與行範圍（唯讀）", "search_code": "以 RE2 搜尋 snapshot（唯讀）",
-			"semgrep": "以 pack 登錄的規則掃描 snapshot（唯讀）", "submit_witness_spec": "提交受 schema 約束的 WitnessSpec",
+			"read_code": "read a file and line range inside the snapshot (read-only)", "search_code": "search the snapshot with RE2 (read-only)",
+			"semgrep": "scan the snapshot with pack-registered rules (read-only)", "submit_witness_spec": "submit a schema-constrained WitnessSpec",
 		})
 		if err != nil {
 			return stageError("prove", err)
@@ -864,11 +864,11 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 		}
 		snapshotDir := filepath.Join(cacheDir, "snapshots", snapshotID)
 		if stat, statErr := os.Stat(snapshotDir); statErr != nil || !stat.IsDir() {
-			return stageError("prove", fmt.Errorf("scan snapshot %s 不存在；拒絕改用 live worktree", snapshotID))
+			return stageError("prove", fmt.Errorf("scan snapshot %s does not exist; refusing to fall back to the live worktree", snapshotID))
 		}
 		repoTreeHash := snapshotTreeHash(events, snapshotID)
 		if repoTreeHash == "" {
-			return stageError("prove", fmt.Errorf("journal 缺少 snapshot %s 的 tree hash", snapshotID))
+			return stageError("prove", fmt.Errorf("journal is missing the tree hash for snapshot %s", snapshotID))
 		}
 		if err := snapshot.Verify(snapshotDir, snapshotID, repoTreeHash); err != nil {
 			return stageError("prove", err)
@@ -878,7 +878,7 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 			SnapshotID: snapshotID, SnapshotDir: snapshotDir, RunDir: opts.runDir, RepoTreeHash: repoTreeHash, CachePath: imageCachePath, Budget: b}
 
 		if opts.watch {
-			fmt.Fprintf(cmd.OutOrStdout(), "prove 開始：%s（最多 %d 個假設）\n", findingID, b.MaxHypotheses)
+			fmt.Fprintf(cmd.OutOrStdout(), "prove started: %s (up to %d hypotheses)\n", findingID, b.MaxHypotheses)
 		}
 		if manualSpec != nil {
 			res, proveErr := p.Prove(cmd.Context(), orchestrator.ProveInput{FindingID: findingID, Reachability: reachability, Spec: manualSpec})
@@ -942,17 +942,17 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 				}
 			}
 			if opts.watch {
-				fmt.Fprintf(cmd.OutOrStdout(), "prove 嘗試：%s 共 %d 次\n", findingID, len(res.Attempts))
+				fmt.Fprintf(cmd.OutOrStdout(), "prove attempts: %s, %d total\n", findingID, len(res.Attempts))
 			}
 		}
 		mode, _ := finding["mode"].(string)
 		finding["confidence"] = triage.Confidence(stringValue(finding["verification"]), mode, sliceLen(finding["assumptions"]), 1)
-		fmt.Fprintf(cmd.OutOrStdout(), "prove 完成：%s = %s\n", findingID, finding["verification"])
+		fmt.Fprintf(cmd.OutOrStdout(), "prove complete: %s = %s\n", findingID, finding["verification"])
 	}
 	if _, err := reporting.WriteFindings(opts.runDir, findings); err != nil {
 		return stageError("prove", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "產物：%s\n", opts.runDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "artifacts: %s\n", opts.runDir)
 	return nil
 }
 
@@ -1008,7 +1008,7 @@ func proverAdapter(repoRoot string) (llm.Adapter, string, error) {
 	}
 	ref, _, err := settings.ResolveModel(repo, user, settings.RoleProver)
 	if err != nil {
-		return nil, "", fmt.Errorf("prover 模型尚未設定；請依序執行 /provider add → /key set → /model set：%w", err)
+		return nil, "", fmt.Errorf("prover model not configured; run /provider add -> /key set -> /model set in order: %w", err)
 	}
 	if err := settings.ValidateRef(ref); err != nil {
 		return nil, "", err
@@ -1019,23 +1019,23 @@ func proverAdapter(repoRoot string) (llm.Adapter, string, error) {
 		provider, ok = user.Providers[providerName]
 	}
 	if !ok {
-		return nil, "", fmt.Errorf("prover provider %q 未設定；請執行 /provider add", providerName)
+		return nil, "", fmt.Errorf("prover provider %q not configured; run /provider add", providerName)
 	}
 	manager := &credentials.Manager{Keyring: credentials.NewOSKeyring(), File: &credentials.FileStore{Path: credentialPath}}
 	key, _, err := manager.Resolve(providerName, credentials.ProviderType(provider.Type))
 	if err != nil {
-		return nil, "", fmt.Errorf("prover provider %q 缺少金鑰；請執行 /key set：%w", providerName, err)
+		return nil, "", fmt.Errorf("prover provider %q is missing a key; run /key set: %w", providerName, err)
 	}
 	switch credentials.ProviderType(provider.Type) {
 	case credentials.ProviderTypeAnthropic:
 		return llm.NewAnthropic(key, provider.BaseURL), model, nil
 	case credentials.ProviderTypeOpenAICompat:
 		if provider.BaseURL == "" {
-			return nil, "", fmt.Errorf("openai-compat provider %q 缺 base_url", providerName)
+			return nil, "", fmt.Errorf("openai-compat provider %q is missing base_url", providerName)
 		}
 		return llm.NewOpenAICompat(providerName, provider.BaseURL, key, model), model, nil
 	default:
-		return nil, "", fmt.Errorf("provider %q 的 type %q 不受支援", providerName, provider.Type)
+		return nil, "", fmt.Errorf("provider %q has unsupported type %q", providerName, provider.Type)
 	}
 }
 
@@ -1101,13 +1101,13 @@ func snapshotCacheDir() (string, error) {
 func aegisCacheDir() (string, error) {
 	if configured := os.Getenv("AEGIS_CACHE_DIR"); configured != "" {
 		if !filepath.IsAbs(configured) {
-			return "", errors.New("AEGIS_CACHE_DIR 必須是絕對路徑")
+			return "", errors.New("AEGIS_CACHE_DIR must be an absolute path")
 		}
 		return filepath.Clean(configured), nil
 	}
 	root, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("解析 snapshot cache：%w", err)
+		return "", fmt.Errorf("resolving snapshot cache: %w", err)
 	}
 	return filepath.Join(root, "aegis"), nil
 }
@@ -1125,11 +1125,11 @@ func snapshotTreeHash(events []journal.Event, snapshotID string) string {
 func sinkContext(snapshotDir, rel string, line, radius int) (string, error) {
 	clean := filepath.Clean(rel)
 	if rel == "" || filepath.IsAbs(rel) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("finding sink path 越出 snapshot：%q", rel)
+		return "", fmt.Errorf("finding sink path escapes the snapshot: %q", rel)
 	}
 	data, err := os.ReadFile(filepath.Join(snapshotDir, clean))
 	if err != nil {
-		return "", fmt.Errorf("讀取 sink context：%w", err)
+		return "", fmt.Errorf("reading sink context: %w", err)
 	}
 	lines := strings.Split(string(data), "\n")
 	start, end := line-radius, line+radius
@@ -1236,7 +1236,7 @@ func ensurePackCoversInventory(pack *packs.Pack, inv *inventory.Inventory, revie
 		return nil
 	}
 	if len(coverage.DetectorIDs) == 0 {
-		return errors.New("discovery 覆蓋範圍為零：未設定 LLM reviewer，pack 也沒有 detector")
+		return errors.New("discovery coverage is zero: no LLM reviewer configured and the pack has no detector")
 	}
 	detectorLanguages := stringSliceMap(coverage.DetectorLanguages)
 	for _, language := range coverage.TargetLanguages {
@@ -1244,7 +1244,7 @@ func ensurePackCoversInventory(pack *packs.Pack, inv *inventory.Inventory, revie
 			return nil
 		}
 	}
-	return fmt.Errorf("discovery 覆蓋範圍為零：未設定 LLM reviewer，Semgrep detector 語言為 %s，目標語言為 %s；拒絕產生『0 弱點』報告。請設定 reviewer 或提供相符 detector",
+	return fmt.Errorf("discovery coverage is zero: no LLM reviewer configured, Semgrep detector languages are %s, target languages are %s; refusing to produce a \"0 vulnerabilities\" report. Configure a reviewer or provide a matching detector",
 		displayCLIList(coverage.DetectorLanguages), displayCLIList(coverage.TargetLanguages))
 }
 
@@ -1322,7 +1322,7 @@ func packCoverage(pack *packs.Pack, inv *inventory.Inventory, reviewer bool) cov
 
 func displayCLIList(values []string) string {
 	if len(values) == 0 {
-		return "（無）"
+		return "(none)"
 	}
 	return strings.Join(values, ", ")
 }
@@ -1359,5 +1359,5 @@ func latestRunDir(root string) string {
 }
 
 func stageError(stage string, err error) error {
-	return fmt.Errorf("✗ STAGE FAILED：%s\njournal 位置：%s\n下一步建議：%s\n原因：%s", stage, "（本次尚未建立或由上方 workflow 顯示）", "修正原因後重試；成功時會明確顯示 ✓ COMPLETE", err)
+	return fmt.Errorf("✗ STAGE FAILED: %s\njournal: %s\nnext step: %s\ncause: %s", stage, "(not created yet, or shown by the workflow above)", "fix the cause and retry; success prints ✓ COMPLETE explicitly", err)
 }

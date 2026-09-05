@@ -83,17 +83,17 @@ type session struct {
 }
 
 // errUnknownCmd 標記「未知指令」——Run 以此區分提示文案（附 /help 提示）。
-var errUnknownCmd = errors.New("未知指令")
+var errUnknownCmd = errors.New("unknown command")
 
 // Run 進入互動模式（§3.3）：逐行讀 In，空行略過；"exit"/"quit"/EOF 結束；
 // "/help" 或 "/" 前綴分派 slash 指令；未知輸入輸出一行錯誤並提示 /help。
 // 指令執行錯誤只輸出、不中斷 REPL（設定是互動修正的循環）。
 func Run(deps Deps) error {
 	if deps.Out == nil {
-		return errors.New("console: Deps.Out 不得為 nil")
+		return errors.New("console: Deps.Out must not be nil")
 	}
 	if deps.In == nil {
-		return errors.New("console: Deps.In 不得為 nil")
+		return errors.New("console: Deps.In must not be nil")
 	}
 	// 路徑補預設（§3.1 / §3.3）：cmd 層可顯式給，未給時用套件慣例路徑。
 	if deps.RepoConfigPath == "" {
@@ -102,14 +102,14 @@ func Run(deps Deps) error {
 	if deps.UserConfigPath == "" {
 		p, err := settings.DefaultUserPath()
 		if err != nil {
-			return fmt.Errorf("console: 解析使用者設定檔路徑: %w", err)
+			return fmt.Errorf("console: resolving user config path: %w", err)
 		}
 		deps.UserConfigPath = p
 	}
 	if deps.CredentialsPath == "" {
 		p, err := credentials.DefaultFilePath()
 		if err != nil {
-			return fmt.Errorf("console: 解析憑證退回檔路徑: %w", err)
+			return fmt.Errorf("console: resolving credentials fallback path: %w", err)
 		}
 		deps.CredentialsPath = p
 	}
@@ -121,7 +121,7 @@ func Run(deps Deps) error {
 	s := &session{deps: deps, ctx: ctx, out: deps.Out}
 	s.sc = bufio.NewScanner(deps.In)
 
-	fmt.Fprintln(s.out, "aegis 互動模式（§3.3）：輸入 /help 顯示指令，exit 離開。")
+	fmt.Fprintln(s.out, "aegis interactive mode (§3.3): type /help for commands, exit to quit.")
 	for s.sc.Scan() {
 		line := strings.TrimSpace(s.sc.Text())
 		switch {
@@ -132,10 +132,10 @@ func Run(deps Deps) error {
 		}
 		if err := s.dispatch(line); err != nil {
 			if errors.Is(err, errUnknownCmd) {
-				fmt.Fprintf(s.out, "錯誤：%v；輸入 /help 查看可用指令。\n", err)
+				fmt.Fprintf(s.out, "error: %v; type /help to see available commands.\n", err)
 				continue
 			}
-			fmt.Fprintf(s.out, "錯誤：%v\n", err)
+			fmt.Fprintf(s.out, "error: %v\n", err)
 		}
 	}
 	return s.sc.Err()
@@ -154,27 +154,27 @@ func (s *session) dispatch(line string) error {
 		return nil
 	case "/provider":
 		if len(args) == 0 {
-			return fmt.Errorf("/provider 需要子指令：list | add <name> | remove <name>")
+			return fmt.Errorf("/provider needs a subcommand: list | add <name> | remove <name>")
 		}
 		switch args[0] {
 		case "list":
 			return s.cmdProviderList()
 		case "add":
 			if len(args) != 2 {
-				return errors.New("用法：/provider add <name>")
+				return errors.New("usage: /provider add <name>")
 			}
 			return s.cmdProviderAdd(args[1])
 		case "remove":
 			if len(args) != 2 {
-				return errors.New("用法：/provider remove <name>")
+				return errors.New("usage: /provider remove <name>")
 			}
 			return s.cmdProviderRemove(args[1])
 		default:
-			return fmt.Errorf("%w：%s（/provider 的子指令為 list | add | remove）", errUnknownCmd, line)
+			return fmt.Errorf("%w: %s (/provider subcommands are list | add | remove)", errUnknownCmd, line)
 		}
 	case "/key":
 		if len(args) != 2 {
-			return errors.New("用法：/key set <provider> 或 /key clear <provider>")
+			return errors.New("usage: /key set <provider> or /key clear <provider>")
 		}
 		switch args[0] {
 		case "set":
@@ -182,24 +182,24 @@ func (s *session) dispatch(line string) error {
 		case "clear":
 			return s.cmdKeyClear(args[1])
 		default:
-			return fmt.Errorf("%w：%s（/key 的子指令為 set | clear）", errUnknownCmd, line)
+			return fmt.Errorf("%w: %s (/key subcommands are set | clear)", errUnknownCmd, line)
 		}
 	case "/model":
 		if len(args) == 0 {
-			return errors.New("/model 需要子指令：list | set <role> <provider/model-id> | reset")
+			return errors.New("/model needs a subcommand: list | set <role> <provider/model-id> | reset")
 		}
 		switch args[0] {
 		case "list":
 			return s.cmdModelList()
 		case "set":
 			if len(args) != 3 {
-				return errors.New("用法：/model set <role|all> <provider/model-id>")
+				return errors.New("usage: /model set <role|all> <provider/model-id>")
 			}
 			return s.cmdModelSet(args[1], args[2])
 		case "reset":
 			return s.cmdModelReset()
 		default:
-			return fmt.Errorf("%w：%s（/model 的子指令為 list | set | reset）", errUnknownCmd, line)
+			return fmt.Errorf("%w: %s (/model subcommands are list | set | reset)", errUnknownCmd, line)
 		}
 	case "/status":
 		return s.cmdStatus(s.ctx)
@@ -207,11 +207,11 @@ func (s *session) dispatch(line string) error {
 		return s.cmdDoctor(s.ctx)
 	case "/review", "/scan", "/prove", "/report", "/replay":
 		if s.deps.RunCommand == nil {
-			return errors.New("pipeline 指令未接線")
+			return errors.New("pipeline command not wired")
 		}
 		return s.deps.RunCommand(s.ctx, append([]string{strings.TrimPrefix(cmd, "/")}, args...), s.out)
 	default:
-		return fmt.Errorf("%w：%s", errUnknownCmd, cmd)
+		return fmt.Errorf("%w: %s", errUnknownCmd, cmd)
 	}
 }
 
@@ -267,11 +267,11 @@ func splitCommandLine(line string) ([]string, error) {
 		field.WriteRune('\\')
 	}
 	if quote != 0 {
-		return nil, errors.New("指令含有未閉合的引號")
+		return nil, errors.New("command has an unclosed quote")
 	}
 	flush()
 	if len(fields) == 0 {
-		return nil, errors.New("空指令")
+		return nil, errors.New("empty command")
 	}
 	return fields, nil
 }
@@ -306,13 +306,13 @@ func (s *session) readSecret(prompt string) ([]byte, error) {
 	if s.deps.ReadSecret != nil {
 		return s.deps.ReadSecret(prompt)
 	}
-	fmt.Fprintln(s.out, "警告：目前輸入來源非終端機，無法隱藏輸入（no-echo）；輸入內容將被回顯。")
+	fmt.Fprintln(s.out, "warning: input is not a terminal, so it cannot be hidden (no-echo); what you type will be echoed.")
 	fmt.Fprint(s.out, prompt)
 	if !s.sc.Scan() {
 		if err := s.sc.Err(); err != nil {
-			return nil, fmt.Errorf("console: 讀取金鑰輸入: %w", err)
+			return nil, fmt.Errorf("console: reading key input: %w", err)
 		}
-		return nil, errors.New("console: 輸入已結束（EOF），未取得金鑰")
+		return nil, errors.New("console: input ended (EOF) before a key was provided")
 	}
 	return []byte(s.sc.Text()), nil
 }
@@ -329,23 +329,23 @@ func (s *session) promptLine(prompt string) string {
 
 // cmdHelp 列出 slash 指令（§3.3 表）。
 func (s *session) cmdHelp() {
-	fmt.Fprint(s.out, `可用指令（§3.3）：
-  /provider list                              列出供應商與金鑰有無（永不顯示內容）
-  /provider add <name>                        新增供應商（anthropic | openai-compat | openrouter 捷徑）
-  /provider remove <name>                     移除供應商（連同其金鑰）
-  /key set <provider>                         隱藏輸入 API 金鑰並儲存
-  /key clear <provider>                       刪除已存金鑰
-  /model list                                 檢視角色路由（repo > user，§3.1）
-  /model set <role|all> <provider/model-id>   覆寫角色路由（all = 五角色一次設定；寫入使用者層級設定）
-  /model reset                                清空使用者層級模型覆寫
-  /status                                     供應商、金鑰、路由、Docker 狀態
-  /doctor                                     體檢（Docker、映像、供應商連通）
-  /review [repo] [flags]                      一鍵掃描、實證、重驗並產生報告（建議入口）
-  /scan [flags]                               僅掃描目標 repo（進階／除錯）
-  /prove [F-ID] [flags]                       證明指定 finding；省略 ID 則處理全部
-  /report [flags]                             產生 findings、SARIF 與 Markdown 報告
-  /replay [flags]                             離線重驗 evidence bundle
-  exit | quit                                 離開互動模式
+	fmt.Fprint(s.out, `Commands (§3.3):
+  /provider list                              list providers and whether a key is set (never shows the value)
+  /provider add <name>                        add a provider (anthropic | openai-compat | openrouter shortcut)
+  /provider remove <name>                     remove a provider (and its key)
+  /key set <provider>                         enter an API key with hidden input and store it
+  /key clear <provider>                       delete a stored key
+  /model list                                 view role routing (repo > user, §3.1)
+  /model set <role|all> <provider/model-id>   override role routing (all = set every role at once; written to user config)
+  /model reset                                clear user-level model overrides
+  /status                                     provider, key, routing, and Docker status
+  /doctor                                     health check (Docker, images, provider connectivity)
+  /review [repo] [flags]                      scan, prove, replay, and report in one command (recommended entry point)
+  /scan [flags]                               scan the target repo only (advanced / debugging)
+  /prove [F-ID] [flags]                       prove a finding; omit the ID to process all
+  /report [flags]                             generate findings, SARIF, and the Markdown report
+  /replay [flags]                             revalidate an evidence bundle offline
+  exit | quit                                 leave interactive mode
 `)
 }
 
@@ -366,11 +366,11 @@ func (s *session) writeUserChecked(repo, user *settings.Config) error {
 		Models    map[string]string            `toml:"models"`
 	}{Providers: user.Providers, Models: user.Models}
 	if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
-		return fmt.Errorf("console: 編碼使用者設定: %w", err)
+		return fmt.Errorf("console: encoding user config: %w", err)
 	}
 	text := buf.String()
 	if redaction.Redact(text, s.resolvedKeys(repo, user)) != text {
-		return errors.New("寫入前防洩檢查失敗：設定內容含有已登錄的金鑰片段（§23-6），已拒絕寫入；請檢查 base_url 等欄位是否誤貼金鑰")
+		return errors.New("pre-write leak check failed: the config contains a registered key fragment (§23-6); write refused. Check whether a key was pasted into fields like base_url")
 	}
 	return settings.SaveUser(s.deps.UserConfigPath, user)
 }

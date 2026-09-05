@@ -7,9 +7,12 @@ import (
 	"github.com/lucasb-eyer/go-colorful"
 )
 
+// Brand cyan, sampled from the AEGIS block logo: a light glow tone blended into
+// the sky-blue block fill. Drives the logo gradient plus the prompt, cursor, and
+// input-border accents so the whole interface reads as one hue.
 var (
-	brandFrom = mustColor("#4FD1C5")
-	brandTo   = mustColor("#48BB78")
+	brandFrom = mustColor("#8CE0F7")
+	brandTo   = mustColor("#3AAEDD")
 )
 
 func mustColor(hex string) colorful.Color {
@@ -20,6 +23,7 @@ func mustColor(hex string) colorful.Color {
 	return c
 }
 
+// AEGIS wordmark in the FIGlet "ANSI Shadow" font.
 const asciiLogo = ` █████╗ ███████╗ ██████╗ ██╗███████╗
 ██╔══██╗██╔════╝██╔════╝ ██║██╔════╝
 ███████║█████╗  ██║  ███╗██║███████╗
@@ -76,5 +80,5 @@ func banner(words copyText) string {
 	logo := gradientBlock(asciiLogo, brandFrom, brandTo)
 	tagline := gradientText(words.tagline, brandFrom, brandTo)
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("#7A8A87")).Render(words.bannerHint)
-	return logo + "\n\n  " + tagline + "\n  " + hint
+	return logo + "\n\n" + tagline + "\n" + hint
 }

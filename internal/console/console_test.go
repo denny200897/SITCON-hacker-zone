@@ -112,11 +112,11 @@ func TestProviderAddListRemoveRoundtrip(t *testing.T) {
 	run(t, d, "/provider add p1\nanthropic\n\n/provider add p2\nopenai-compat\nhttps://api.example.com/v1\n\n")
 
 	list1 := run(t, d, "/provider list\nexit\n")
-	assertAll(t, list1, "p1", "p2", "anthropic", "openai-compat", "https://api.example.com/v1", "未設", "user")
+	assertAll(t, list1, "p1", "p2", "anthropic", "openai-compat", "https://api.example.com/v1", "not set", "user")
 	assertNone(t, list1, "sk-") // §3.3：list 永不顯示金鑰內容。
 
 	removeOut := run(t, d, "/provider remove p2\nexit\n")
-	assertAll(t, removeOut, "已移除供應商")
+	assertAll(t, removeOut, "removed provider")
 	list2 := run(t, d, "/provider list\nexit\n")
 	assertNone(t, list2, "p2")
 	assertAll(t, list2, "p1")
@@ -148,10 +148,10 @@ func TestKeySetStoresViaReadSecretAndStatusShowsSet(t *testing.T) {
 		t.Fatalf("keyring Get: got %q err %v, want %q nil", got, err, fakeKey)
 	}
 	// /key set 只印成功訊息與儲存位置，永不印內容（§23-6）。
-	assertAll(t, keyOut, "已為供應商", "OS keychain")
+	assertAll(t, keyOut, "set key for provider", "OS keychain")
 	assertNone(t, keyOut, fakeKey)
 	// list / status 顯示「已設（來源）」但永不顯示內容。
-	assertAll(t, out2, "已設（keychain）")
+	assertAll(t, out2, "set (keychain)")
 	assertNone(t, out2, fakeKey)
 }
 
@@ -164,7 +164,7 @@ func TestKeySetNilReadSecretEchoesWarning(t *testing.T) {
 	if got, err := kr.Get(credentials.KeyringService, "p"); err != nil || got != "sk-echoed-fake-key" {
 		t.Fatalf("降級讀取未存入金鑰: got %q err %v", got, err)
 	}
-	assertAll(t, o, "無法隱藏輸入")
+	assertAll(t, o, "cannot be hidden")
 }
 
 // modelSetListReset：/model set 寫入使用者層級覆寫；/model list 顯示 repo >
@@ -185,7 +185,7 @@ recon = "anthropic/claude-recon"
 
 	run(t, d, "/model reset\nexit\n")
 	list2 := run(t, d, "/model list\nexit\n")
-	assertAll(t, list2, "prover （未設定）")
+	assertAll(t, list2, "prover (not set)")
 	user, err := settings.Load(d.UserConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ recon = "anthropic/claude-recon"
 func TestModelSetValidations(t *testing.T) {
 	d, _, _ := newDeps(t)
 	out := run(t, d, "/model set nosuchrole anthropic/claude-x\n/model set prover not-a-ref\n/model set prover unknown-provider/m1\nexit\n")
-	assertAll(t, out, "未知的角色", "must be", "不存在")
+	assertAll(t, out, "unknown role", "must be", "does not exist")
 	// 三道錯誤都不該寫出使用者設定檔。
 	if _, err := os.Stat(d.UserConfigPath); !os.IsNotExist(err) {
 		t.Fatalf("驗證失敗不應產生使用者設定檔, err = %v", err)
@@ -273,7 +273,7 @@ func TestModelSetAllRoles(t *testing.T) {
 func TestModelSetAllRequiresProviderAndRef(t *testing.T) {
 	d, _, _ := newDeps(t)
 	out := run(t, d, "/model set all not-a-ref\n/model set all ghost/m1\nexit\n")
-	assertAll(t, out, "must be", "不存在")
+	assertAll(t, out, "must be", "does not exist")
 	user, err := settings.Load(d.UserConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +289,7 @@ func TestStatusShowsMarkers(t *testing.T) {
 	d, _, _ := newDeps(t)
 	run(t, d, "/provider add p\nanthropic\n\n")
 	out := run(t, d, "/status\nexit\n")
-	assertAll(t, out, "未設", d.UserConfigPath, d.RepoConfigPath, d.CredentialsPath, "docker")
+	assertAll(t, out, "not set", d.UserConfigPath, d.RepoConfigPath, d.CredentialsPath, "docker")
 }
 
 // doctorRendersChecks：注入 Doctor 時逐項 render「OK/FAIL name — detail」；
@@ -307,14 +307,14 @@ func TestDoctorRendersChecks(t *testing.T) {
 
 	d2, _, _ := newDeps(t)
 	out2 := run(t, d2, "/doctor\nexit\n")
-	assertAll(t, out2, "doctor 未接線")
+	assertAll(t, out2, "doctor not wired")
 }
 
 // unknownCommandError：未知指令輸出一行錯誤並提示 /help（§3.3 分派）。
 func TestUnknownCommandError(t *testing.T) {
 	d, _, _ := newDeps(t)
 	out := run(t, d, "/frobnicate x\nexit\n")
-	assertAll(t, out, "未知指令", "/help")
+	assertAll(t, out, "unknown command", "/help")
 }
 
 func TestPipelineCommandsReuseCLIArguments(t *testing.T) {
@@ -357,11 +357,11 @@ func TestPipelineCommandErrorsDoNotExitREPL(t *testing.T) {
 		return fmt.Errorf("%s failed", args[0])
 	}
 	out := run(t, d, "/scan\n/status\nexit\n")
-	assertAll(t, out, "錯誤：scan failed", "Docker")
+	assertAll(t, out, "error: scan failed", "Docker")
 
 	d2, _, _ := newDeps(t)
 	out = run(t, d2, "/scan\n/report --target \"unterminated\nexit\n")
-	assertAll(t, out, "pipeline 指令未接線", "未閉合的引號")
+	assertAll(t, out, "pipeline command not wired", "unclosed quote")
 }
 
 // exitOnExit：輸入 "exit"（與 "quit"）立即結束、Run 回 nil；EOF 亦為 nil（§3.3）。
@@ -393,7 +393,7 @@ func TestWriteGuardRefusesLeakedKey(t *testing.T) {
 	run(t, d, "/provider add p\nanthropic\n\n/key set p\nexit\n")
 	out := run(t, d, "/provider add leak\nopenai-compat\nhttps://api.example.com/v1?token="+fakeKey+"\nexit\n")
 
-	assertAll(t, out, "防洩檢查失敗")
+	assertAll(t, out, "leak check failed")
 	assertNone(t, out, fakeKey) // 錯誤路徑輸出亦不得洩漏金鑰內容（§23-6）。
 	if _, err := kr.Get(credentials.KeyringService, "p"); err != nil {
 		t.Fatalf("guard 不應影響已存金鑰: %v", err)
@@ -404,7 +404,7 @@ func TestWriteGuardRefusesLeakedKey(t *testing.T) {
 	}
 	// 對照：不含金鑰的合法 base_url 可正常寫入。
 	out2 := run(t, d, "/provider add ok\nopenai-compat\nhttps://api.example.com/v1\nexit\n")
-	assertNone(t, out2, "防洩檢查失敗")
+	assertNone(t, out2, "leak check failed")
 	user, err := settings.Load(d.UserConfigPath)
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +423,7 @@ func TestKeyClear(t *testing.T) {
 		t.Fatal("clear 後金鑰仍存在於 keyring")
 	}
 	list := run(t, d, "/provider list\nexit\n")
-	assertAll(t, list, "未設")
+	assertAll(t, list, "not set")
 }
 
 // providerRemoveReferencedRequiresConfirm：仍被模型路由引用的供應商移除時，
@@ -433,7 +433,7 @@ func TestProviderRemoveReferencedRequiresConfirm(t *testing.T) {
 	d.ReadSecret = secretFeeder(t, "sk-remove-fake")
 	run(t, d, "/provider add p\nanthropic\n\n/key set p\n/model set prover p/m1\nexit\n")
 	out := run(t, d, "/provider remove p\nno\nexit\n")
-	assertAll(t, out, "警告", "已取消移除")
+	assertAll(t, out, "warning", "removal cancelled")
 	run(t, d, "/provider remove p\nyes\nexit\n")
 	if _, err := kr.Get(credentials.KeyringService, "p"); err == nil {
 		t.Fatal("確認移除後金鑰未一併清除（§3.3）")
@@ -456,5 +456,5 @@ func TestProviderAddValidations(t *testing.T) {
 		"/provider add p", "anthropic", "",
 		"exit",
 	}, "\n"))
-	assertAll(t, out, "不合法", "已存在")
+	assertAll(t, out, "not valid", "already exists")
 }

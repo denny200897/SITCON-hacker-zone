@@ -123,7 +123,7 @@ func (*sequenceRoleAdapter) Provider() string { return "test" }
 
 func TestRoleTextRejectsRefusal(t *testing.T) {
 	_, err := roleText(context.Background(), fixedRoleAdapter{response: llm.Response{StopReason: llm.StopRefusal, RefusalCategory: "cyber"}}, llm.RoleReviewer, "configured", "system", "prompt", "high")
-	if err == nil || !strings.Contains(err.Error(), "拒絕") {
+	if err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("err = %v, want refusal error", err)
 	}
 }
@@ -147,7 +147,7 @@ func TestPackCoverageRejectsGoRepoWithPythonOnlyPack(t *testing.T) {
 	}}
 	inv := &inventory.Inventory{Files: []inventory.File{{Path: "main.go", Language: "go"}}}
 	err := ensurePackCoversInventory(p, inv, false)
-	if err == nil || !strings.Contains(err.Error(), "discovery 覆蓋範圍為零") || !strings.Contains(err.Error(), "目標語言為 go") {
+	if err == nil || !strings.Contains(err.Error(), "discovery coverage is zero") || !strings.Contains(err.Error(), "target languages are go") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -252,11 +252,16 @@ func TestAITracePersistsAndWatchesVisibleEvents(t *testing.T) {
 	if err := trace.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(terminal.String(), "review-batch-1") || !strings.Contains(terminal.String(), "checked auth flow") {
+	if !strings.Contains(terminal.String(), "checked auth flow") {
 		t.Fatalf("terminal trace = %s", terminal.String())
 	}
-	if strings.Contains(terminal.String(), "func vulnerable") || !strings.Contains(terminal.String(), "request sent") || !strings.Contains(terminal.String(), "result received") {
+	// The watch stream summarizes; it never dumps source, and payload/token
+	// accounting is dropped from the visible stream (still kept in the audit log).
+	if strings.Contains(terminal.String(), "func vulnerable") || !strings.Contains(terminal.String(), "result received") {
 		t.Fatalf("terminal must summarize rather than dump source:\n%s", terminal.String())
+	}
+	if strings.Contains(terminal.String(), "request sent") || strings.Contains(terminal.String(), "payload") {
+		t.Fatalf("outbound payload accounting must not appear in the watch stream:\n%s", terminal.String())
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "ai-events.jsonl"))
 	if err != nil || !strings.Contains(string(data), `"kind":"response"`) || !strings.Contains(string(data), "func vulnerable") {

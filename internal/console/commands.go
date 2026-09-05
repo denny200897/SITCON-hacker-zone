@@ -28,12 +28,12 @@ func (s *session) newTable() *tabwriter.Writer {
 // 永不含金鑰內容（§3.3 /provider list 只顯示有無）。
 func keyCell(set bool, source string) string {
 	if !set {
-		return "未設"
+		return "not set"
 	}
 	if source == "" {
-		return "已設"
+		return "set"
 	}
-	return "已設（" + source + "）"
+	return "set (" + source + ")"
 }
 
 // cmdProviderList 列出供應商：名稱、類型、base_url、金鑰有無（§3.3）。
@@ -52,7 +52,7 @@ func (s *session) cmdProviderList() error {
 func (s *session) renderProviders(repo, user *settings.Config) {
 	mgr := s.manager()
 	w := s.newTable()
-	fmt.Fprintln(w, "名稱\t層級\t類型\tbase_url\t金鑰")
+	fmt.Fprintln(w, "name\tlayer\ttype\tbase_url\tkey")
 	row := func(name, layer string, p settings.Provider) {
 		set, source := mgr.Status(name, credentials.ProviderType(p.Type))
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", name, layer, p.Type, p.BaseURL, keyCell(set, source))
@@ -99,44 +99,45 @@ const openRouterBaseURL = "https://openrouter.ai/api/v1"
 //       避免 EOF／管道情境卡死；選項 (b) 迴圈重問直到合法或 EOF。
 func (s *session) cmdProviderAdd(name string) error {
 	if name == "" || strings.ContainsAny(name, " \t") {
-		return errors.New("供應商名稱不可為空或含空白")
+		return errors.New("provider name must not be empty or contain whitespace")
 	}
 	repo, user, err := s.loadConfigs()
 	if err != nil {
 		return err
 	}
 	if _, ok := user.Providers[name]; ok {
-		return fmt.Errorf("供應商 %q 已存在於使用者設定；先以 /provider remove %s 移除再新增", name, name)
+		return fmt.Errorf("provider %q already exists in user config; remove it first with /provider remove %s, then add again", name, name)
 	}
 	if _, ok := repo.Providers[name]; ok {
-		return fmt.Errorf("名稱 %q 已被 repo aegis.toml 使用；使用者層不得同名遮蔽，請改名或改 aegis.toml", name)
+		return fmt.Errorf("name %q is already used by repo aegis.toml; the user layer must not shadow it — rename or edit aegis.toml", name)
 	}
 
-	pt := credentials.ProviderType(s.promptLine("供應商類型（anthropic | openai-compat | openrouter）: "))
+	pt := credentials.ProviderType(s.promptLine("provider type (anthropic | openai-compat | openrouter): "))
 	baseURL := ""
 	switch pt {
 	case credentials.ProviderTypeAnthropic:
-		// 合法（§3.2 閉集）；走官方端點，不問 base_url。
+		// Valid (§3.2 closed set); uses the official endpoint, no base_url prompt.
 	case credentials.ProviderTypeOpenAICompat:
-		baseURL = s.promptLine("base_url（留空則不設定）: ")
+		baseURL = s.promptLine("base_url (leave empty to skip): ")
 	case "openrouter":
-		// 便捷預設（§3.3）：OpenRouter 是 openai-compat 端點，落盤 type 恆為
-		// openai-compat，避免 §3.2 轉接器閉集長出第三個成員。留空 = 官方端點；
-		// 也可貼上自訂端點（代理／鏡像）。
+		// Convenience default (§3.3): OpenRouter is an openai-compat endpoint;
+		// the stored type stays openai-compat so the §3.2 adapter set does not
+		// grow a third member. Empty = official endpoint; a custom endpoint
+		// (proxy/mirror) may also be pasted.
 		pt = credentials.ProviderTypeOpenAICompat
-		baseURL = s.promptLine("base_url（直接 Enter = " + openRouterBaseURL + "）: ")
+		baseURL = s.promptLine("base_url (press Enter = " + openRouterBaseURL + "): ")
 		if baseURL == "" {
 			baseURL = openRouterBaseURL
 		}
 	default:
-		return fmt.Errorf("供應商類型 %q 不合法（僅 accept anthropic | openai-compat | openrouter，§3.2）；已取消新增", string(pt))
+		return fmt.Errorf("provider type %q is not valid (only anthropic | openai-compat | openrouter are accepted, §3.2); add cancelled", string(pt))
 	}
 
 	user.Providers[name] = settings.Provider{Type: string(pt), BaseURL: baseURL}
 	if err := s.writeUserChecked(repo, user); err != nil {
 		return err
 	}
-	fmt.Fprintf(s.out, "已新增供應商 %q（type=%s）至 %s；下一步：/key set %s。\n", name, string(pt), s.deps.UserConfigPath, name)
+	fmt.Fprintf(s.out, "added provider %q (type=%s) to %s; next: /key set %s.\n", name, string(pt), s.deps.UserConfigPath, name)
 	return nil
 }
 
@@ -151,9 +152,9 @@ func (s *session) cmdProviderRemove(name string) error {
 	p, ok := user.Providers[name]
 	if !ok {
 		if _, inRepo := repo.Providers[name]; inRepo {
-			return fmt.Errorf("供應商 %q 定義於 repo aegis.toml，互動模式不修改 repo 檔；請直接編輯 %s", name, s.deps.RepoConfigPath)
+			return fmt.Errorf("provider %q is defined in repo aegis.toml; interactive mode does not modify the repo file — edit %s directly", name, s.deps.RepoConfigPath)
 		}
-		return fmt.Errorf("供應商 %q 不存在（/provider list 查看）", name)
+		return fmt.Errorf("provider %q does not exist (see /provider list)", name)
 	}
 
 	// 路由引用檢查：任何 role 的引用 <provider>/<model-id> 其 <provider> 段等於
@@ -169,22 +170,22 @@ func (s *session) cmdProviderRemove(name string) error {
 	scan("repo", repo.Models)
 	scan("user", user.Models)
 	if len(using) > 0 {
-		fmt.Fprintf(s.out, "警告：供應商 %q 仍被以下模型路由引用：%s。\n", name, strings.Join(using, ", "))
-		ans := s.promptLine("輸入 yes 確認移除（其他輸入則取消）: ")
+		fmt.Fprintf(s.out, "warning: provider %q is still referenced by these model routes: %s.\n", name, strings.Join(using, ", "))
+		ans := s.promptLine("type yes to confirm removal (anything else cancels): ")
 		if ans != "yes" {
-			fmt.Fprintln(s.out, "已取消移除。")
+			fmt.Fprintln(s.out, "removal cancelled.")
 			return nil
 		}
 	}
 
 	if err := s.manager().Clear(name, credentials.ProviderType(p.Type)); err != nil {
-		return fmt.Errorf("清除金鑰失敗: %w", err)
+		return fmt.Errorf("failed to clear key: %w", err)
 	}
 	delete(user.Providers, name)
 	if err := s.writeUserChecked(repo, user); err != nil {
 		return err
 	}
-	fmt.Fprintf(s.out, "已移除供應商 %q 及其金鑰（keychain 與檔案退回皆已清）。\n", name)
+	fmt.Fprintf(s.out, "removed provider %q and its key (cleared from both keychain and file fallback).\n", name)
 	return nil
 }
 
@@ -198,7 +199,7 @@ func (s *session) cmdKeySet(providerName string) error {
 	}
 	p, ok := lookupProvider(repo, user, providerName)
 	if !ok {
-		return fmt.Errorf("供應商 %q 不存在；先以 /provider add %s 新增（§3.3 首次執行流程）", providerName, providerName)
+		return fmt.Errorf("provider %q does not exist; add it first with /provider add %s (§3.3 first-run flow)", providerName, providerName)
 	}
 	secret, err := s.readSecret(fmt.Sprintf("[aegis] API key for %s: ", providerName))
 	if err != nil {
@@ -206,20 +207,20 @@ func (s *session) cmdKeySet(providerName string) error {
 	}
 	key := strings.TrimRight(string(secret), "\r\n")
 	if strings.TrimSpace(key) == "" {
-		return errors.New("未輸入金鑰；已取消")
+		return errors.New("no key entered; cancelled")
 	}
 	if err := s.manager().Set(providerName, credentials.ProviderType(p.Type), key); err != nil {
-		return fmt.Errorf("儲存金鑰失敗: %w", err)
+		return fmt.Errorf("failed to store key: %w", err)
 	}
 	// 儲存位置：keychain 命中即 keychain；否則為檔案退回（0600，附一次性警告，
 	// §3.3）。位置訊息不含金鑰內容（§23-6）。
 	loc := "OS keychain"
 	if s.deps.Keyring == nil {
-		loc = "檔案退回 " + s.deps.CredentialsPath + "（權限 0600；建議改用 OS keychain）"
+		loc = "file fallback " + s.deps.CredentialsPath + " (mode 0600; prefer the OS keychain)"
 	} else if _, err := s.deps.Keyring.Get(credentials.KeyringService, providerName); err != nil {
-		loc = "檔案退回 " + s.deps.CredentialsPath + "（權限 0600；keychain 不可用時的退回，§3.3）"
+		loc = "file fallback " + s.deps.CredentialsPath + " (mode 0600; used when the keychain is unavailable, §3.3)"
 	}
-	fmt.Fprintf(s.out, "已為供應商 %q 設定金鑰；儲存位置：%s。\n", providerName, loc)
+	fmt.Fprintf(s.out, "set key for provider %q; stored at: %s.\n", providerName, loc)
 	return nil
 }
 
@@ -232,12 +233,12 @@ func (s *session) cmdKeyClear(providerName string) error {
 	}
 	p, ok := lookupProvider(repo, user, providerName)
 	if !ok {
-		return fmt.Errorf("供應商 %q 不存在（/provider list 查看）", providerName)
+		return fmt.Errorf("provider %q does not exist (see /provider list)", providerName)
 	}
 	if err := s.manager().Clear(providerName, credentials.ProviderType(p.Type)); err != nil {
-		return fmt.Errorf("清除金鑰失敗: %w", err)
+		return fmt.Errorf("failed to clear key: %w", err)
 	}
-	fmt.Fprintf(s.out, "已清除供應商 %q 的金鑰。\n", providerName)
+	fmt.Fprintf(s.out, "cleared the key for provider %q.\n", providerName)
 	return nil
 }
 
@@ -271,11 +272,11 @@ func (s *session) cmdModelList() error {
 // renderModels 輸出模型路由表（/model list 與 /status 共用）。
 func (s *session) renderModels(repo, user *settings.Config) {
 	w := s.newTable()
-	fmt.Fprintln(w, "角色\t模型引用\t來源")
+	fmt.Fprintln(w, "role\tmodel ref\tsource")
 	for _, role := range roles {
 		ref, source, err := settings.ResolveModel(repo, user, role)
 		if err != nil {
-			ref, source = "（未設定）", "—"
+			ref, source = "(not set)", "—"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n", role, ref, source)
 	}
@@ -303,7 +304,7 @@ func (s *session) cmdModelSet(role, ref string) error {
 			}
 		}
 		if !validRole {
-			return fmt.Errorf("未知的角色 %q（可用：recon, reviewer, triager, prover, reporter，或 all 一次設定全部，§3.1）", role)
+			return fmt.Errorf("unknown role %q (available: recon, reviewer, triager, prover, reporter, or all to set every role at once, §3.1)", role)
 		}
 	} else {
 		// 展開萬用字元為 §3.1 角色閉集（固定順序，輸出與寫入皆確定）。
@@ -318,7 +319,7 @@ func (s *session) cmdModelSet(role, ref string) error {
 	}
 	prov, _, _ := strings.Cut(ref, "/")
 	if _, ok := lookupProvider(repo, user, prov); !ok {
-		return fmt.Errorf("引用的供應商 %q 不存在（repo 或使用者設定皆無）；先以 /provider add 新增", prov)
+		return fmt.Errorf("referenced provider %q does not exist (in neither repo nor user config); add it first with /provider add", prov)
 	}
 	for _, target := range targets {
 		user.Models[target] = ref
@@ -327,9 +328,9 @@ func (s *session) cmdModelSet(role, ref string) error {
 		return err
 	}
 	if role == modelSetAll {
-		fmt.Fprintf(s.out, "已將全部 %d 個角色（%s）路由設為 %s（使用者層級覆寫；/model reset 可還原）。\n", len(targets), strings.Join(targets, ", "), ref)
+		fmt.Fprintf(s.out, "routed all %d roles (%s) to %s (user-level override; /model reset restores).\n", len(targets), strings.Join(targets, ", "), ref)
 	} else {
-		fmt.Fprintf(s.out, "已將角色 %q 路由設為 %s（使用者層級覆寫；/model reset 可還原）。\n", role, ref)
+		fmt.Fprintf(s.out, "routed role %q to %s (user-level override; /model reset restores).\n", role, ref)
 	}
 	return nil
 }
@@ -345,7 +346,7 @@ func (s *session) cmdModelReset() error {
 	if err := s.writeUserChecked(repo, user); err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "已清空使用者層級模型覆寫；角色路由回到 repo aegis.toml 的定義（§3.1）。")
+	fmt.Fprintln(s.out, "cleared user-level model overrides; role routing falls back to repo aegis.toml (§3.1).")
 	return nil
 }
 
@@ -356,25 +357,25 @@ func (s *session) cmdStatus(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(s.out, "== 設定檔 ==")
-	fmt.Fprintf(s.out, "repo aegis.toml        %s（%s）\n", s.deps.RepoConfigPath, fileExistsLabel(s.deps.RepoConfigPath))
-	fmt.Fprintf(s.out, "user settings.toml     %s（%s；/model set、/provider add 寫入處，§3.3）\n", s.deps.UserConfigPath, fileExistsLabel(s.deps.UserConfigPath))
-	fmt.Fprintf(s.out, "credentials.toml       %s（%s；keychain 退回檔，0600，§3.3）\n", s.deps.CredentialsPath, fileExistsLabel(s.deps.CredentialsPath))
-	fmt.Fprintln(s.out, "== 供應商 ==")
+	fmt.Fprintln(s.out, "== config files ==")
+	fmt.Fprintf(s.out, "repo aegis.toml        %s (%s)\n", s.deps.RepoConfigPath, fileExistsLabel(s.deps.RepoConfigPath))
+	fmt.Fprintf(s.out, "user settings.toml     %s (%s; where /model set and /provider add write, §3.3)\n", s.deps.UserConfigPath, fileExistsLabel(s.deps.UserConfigPath))
+	fmt.Fprintf(s.out, "credentials.toml       %s (%s; keychain fallback file, 0600, §3.3)\n", s.deps.CredentialsPath, fileExistsLabel(s.deps.CredentialsPath))
+	fmt.Fprintln(s.out, "== providers ==")
 	s.renderProviders(repo, user)
-	fmt.Fprintln(s.out, "== 模型路由 ==")
+	fmt.Fprintln(s.out, "== model routing ==")
 	s.renderModels(repo, user)
 	fmt.Fprintln(s.out, "== Docker ==")
-	fmt.Fprintf(s.out, "docker：%s\n", dockerStatus(ctx))
+	fmt.Fprintf(s.out, "docker: %s\n", dockerStatus(ctx))
 	return nil
 }
 
 // fileExistsLabel 回傳檔案存在性的人類可讀標籤。
 func fileExistsLabel(path string) string {
 	if _, err := os.Stat(path); err == nil {
-		return "存在"
+		return "exists"
 	}
-	return "不存在"
+	return "missing"
 }
 
 // dockerStatus 以「docker version」做快速可用性探測（§3.3 /status）。
@@ -384,25 +385,25 @@ func dockerStatus(ctx context.Context) string {
 	defer cancel()
 	out, err := exec.CommandContext(c, "docker", "version", "--format", "{{.Server.Version}}").Output()
 	if err != nil {
-		return "不可用（找不到 docker 指令或 daemon 未啟動）"
+		return "unavailable (docker command not found or daemon not running)"
 	}
 	v := strings.TrimSpace(string(out))
 	if v == "" {
-		return "可用"
+		return "available"
 	}
-	return "可用（server " + v + "）"
+	return "available (server " + v + ")"
 }
 
 // cmdDoctor 執行體檢（§3.3：Docker、pre-baked 映像、供應商連通）。檢查實作由
 // cmd 層注入；未接線時回報 stub 訊息而非假裝檢查通過。
 func (s *session) cmdDoctor(ctx context.Context) error {
 	if s.deps.Doctor == nil {
-		fmt.Fprintln(s.out, "doctor 未接線（cmd 層未注入 Doctor 檢查實作；本模式僅提供介面，§3.3）。")
+		fmt.Fprintln(s.out, "doctor not wired (the cmd layer injected no Doctor implementation; this mode only provides the interface, §3.3).")
 		return nil
 	}
 	checks := s.deps.Doctor(ctx)
 	if len(checks) == 0 {
-		fmt.Fprintln(s.out, "doctor：無檢查項目。")
+		fmt.Fprintln(s.out, "doctor: no checks to run.")
 		return nil
 	}
 	for _, c := range checks {

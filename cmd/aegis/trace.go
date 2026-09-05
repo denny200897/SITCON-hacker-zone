@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/aegis-dev/aegis/internal/redaction"
 )
 
@@ -39,7 +41,7 @@ type aiTraceEvent struct {
 func openAITrace(runDir string, out io.Writer, watch bool) (*aiTrace, error) {
 	f, err := os.OpenFile(filepath.Join(runDir, "ai-events.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("開啟 AI event stream：%w", err)
+		return nil, fmt.Errorf("opening AI event stream: %w", err)
 	}
 	return &aiTrace{file: f, out: out, watch: watch}, nil
 }
@@ -84,52 +86,94 @@ func emitAITrace(ctx context.Context, role, kind, content string) {
 	_, _ = trace.file.Write(append(data, '\n'))
 	_ = trace.file.Sync()
 	if trace.watch && trace.out != nil {
-		fmt.Fprintln(trace.out, formatWatchEvent(event))
+		if line := formatWatchEvent(event); line != "" {
+			fmt.Fprintln(trace.out, line)
+		}
 	}
 }
 
-// formatWatchEvent intentionally never renders full prompts, source bundles, or
-// tool results. ai-events.jsonl retains the complete redacted audit stream; the
-// terminal is an operator dashboard, not a second artifact dump.
+// Watch-stream styling. The rendered output is meant to read like an agent
+// conversation (thinking → actions → results) rather than a raw event dump.
+// lipgloss emits ANSI only when the destination is a real terminal (the TUI or
+// an interactive --watch); piped/redirected output and `go test` degrade to
+// plain text, so substring assertions and log redirection stay clean.
+var (
+	stThink    = lipgloss.NewStyle().Foreground(lipgloss.Color("#A78BFA")).Bold(true)
+	stThinkTxt = lipgloss.NewStyle().Foreground(lipgloss.Color("#B9A7F0")).Italic(true)
+	stTool     = lipgloss.NewStyle().Foreground(lipgloss.Color("#4FD1C5")).Bold(true)
+	stPhase    = lipgloss.NewStyle().Foreground(lipgloss.Color("#48BB78")).Bold(true)
+	stAnswer   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EDEB"))
+	stDim      = lipgloss.NewStyle().Foreground(lipgloss.Color("#6B7A77"))
+	stErr      = lipgloss.NewStyle().Foreground(lipgloss.Color("#F87171"))
+)
+
+// formatWatchEvent renders one audit event as a single conversational block for
+// the live watch stream. It intentionally never prints full prompts, source
+// bundles, or raw tool results — ai-events.jsonl keeps the complete redacted
+// record; the terminal shows the agent's reasoning and actions, not a data dump.
+//
+// Returning "" drops an event from the visible stream (kept in the audit log):
+// outbound-payload sizes and token accounting are log detail, not operator
+// signal, and would otherwise bury the thinking-and-tools narrative in noise.
 func formatWatchEvent(event aiTraceEvent) string {
-	label := event.Role + " · " + event.Phase
+	label := event.Role
+	if event.Phase != "" {
+		label += " · " + event.Phase
+	}
 	switch event.Kind {
+	case "request", "usage":
+		return ""
 	case "workflow":
-		return "◆ " + label + " — " + oneLine(event.Content, 500)
+		// A phase boundary: a blank line then a bright header, so the transcript
+		// reads in scannable sections rather than one unbroken wall.
+		return "\n" + stPhase.Render("● "+oneLine(event.Content, 400)) + "  " + stDim.Render("("+label+")")
 	case "commentary":
-		return "💭 " + label + "\n  " + oneLine(event.Content, 600)
-	case "request":
-		metadata, payload, _ := strings.Cut(event.Content, "\n")
-		if payload == "" {
-			payload = metadata
-			metadata = "request"
+		// The agent's public progress note before a group of tool calls — the
+		// visible "thinking" the operator wants to follow. Drop the "turn N:"
+		// bookkeeping prefix and show it as a readable, indented block.
+		text := event.Content
+		if strings.HasPrefix(text, "turn ") {
+			if _, rest, ok := strings.Cut(text, ": "); ok {
+				text = rest
+			}
 		}
-		return fmt.Sprintf("▶ %s — request sent (%s; payload %s)", label, oneLine(metadata, 180), humanBytes(len(payload)))
+		return stThink.Render("💭 "+label) + "\n" + indentLines(stThinkTxt.Render(oneLine(text, 1000)), "   ")
 	case "response":
 		if summary, count, ok := structuredResponseSummary(event.Content); ok {
-			return fmt.Sprintf("✓ %s — response received; %d candidate(s)\n  %s", label, count, oneLine(summary, 600))
+			return stTool.Render("⏺") + " " + stAnswer.Render(oneLine(summary, 600)) +
+				" " + stDim.Render(fmt.Sprintf("(%d candidate(s))", count))
 		}
 		if strings.HasPrefix(event.Phase, "prove-") || event.Phase == "report" {
-			return fmt.Sprintf("✓ %s — response received (%s)", label, humanBytes(len(event.Content)))
+			// Long structured artifacts (proofs, reports) land in files; a
+			// byte-count line here is noise.
+			return ""
 		}
-		return fmt.Sprintf("✓ %s — response received (%s)\n  %s", label, humanBytes(len(event.Content)), oneLine(event.Content, 500))
-	case "usage":
-		return "  " + label + " — " + oneLine(event.Content, 240)
+		return stTool.Render("⏺") + " " + stAnswer.Render(oneLine(event.Content, 800))
 	case "tool_call":
 		tool, args, _ := strings.Cut(event.Content, " ")
-		return fmt.Sprintf("  → %s · %s — call (%s)", label, tool, summarizeToolCall(tool, args))
+		return stTool.Render("⏺ "+tool) + " " + stDim.Render(summarizeToolCall(tool, args))
 	case "tool_result":
 		if strings.HasPrefix(event.Content, "ERROR ") {
-			return fmt.Sprintf("  ✗ %s — tool error: %s", label, oneLine(strings.TrimPrefix(event.Content, "ERROR "), 300))
+			return "  " + stErr.Render("⎿ error: "+oneLine(strings.TrimPrefix(event.Content, "ERROR "), 300))
 		}
 		tool, result, _ := strings.Cut(event.Content, " ")
-		return fmt.Sprintf("  ← %s · %s — %s", label, tool, summarizeToolResult(tool, result))
+		return "  " + stDim.Render("⎿ "+summarizeToolResult(tool, result))
 	default:
 		if strings.HasPrefix(event.Kind, "tool_") {
-			return fmt.Sprintf("  ↳ %s — %s (%s)", label, event.Kind, humanBytes(len(event.Content)))
+			return "  " + stDim.Render("⎿ "+event.Kind+" ("+humanBytes(len(event.Content))+")")
 		}
-		return "• " + label + " · " + event.Kind + " — " + oneLine(event.Content, 400)
+		return stDim.Render("• " + label + " · " + event.Kind + " — " + oneLine(event.Content, 400))
 	}
+}
+
+// indentLines prefixes every line of s so wrapped blocks stay visually nested
+// under their header.
+func indentLines(s, prefix string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func structuredResponseSummary(content string) (string, int, bool) {

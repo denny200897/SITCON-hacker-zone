@@ -1,6 +1,6 @@
 # Aegis installer for Windows (PowerShell).
 #
-#   irm https://raw.githubusercontent.com/denny200897/SITCON-hacker-zone/main/scripts/install.ps1 | iex
+#   irm https://denny.li/install.ps1 | iex
 #
 # Environment overrides:
 #   AEGIS_REPO         owner/repo to download from (default denny200897/SITCON-hacker-zone)

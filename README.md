@@ -4,7 +4,7 @@
 
 Aegis 是在本機執行的程式碼安全審查 CLI（Code Security Review Agent Harness）。它結合 LLM 的跨檔案分析、靜態掃描與 Docker 沙箱，從本機儲存庫建立快照、找出候選弱點，對支援的漏洞執行機械驗證，最後輸出可閱讀、可供工具處理與可離線重驗的結果。
 
-[官方網站](https://aegis.denny.li) · [下載版本](https://github.com/denny200897/SITCON-hacker-zone/releases) · [使用文件](docs/USAGE.md) · [回報問題](https://github.com/denny200897/SITCON-hacker-zone/issues)
+[官方網站](https://aegis.denny.li) · [下載版本](https://github.com/denny200897/SITCON-hacker-zone/releases) · [使用文件](docs/USAGE.md) · [技術文件](docs/README.md) · [回報問題](https://github.com/denny200897/SITCON-hacker-zone/issues)
 
 ## 目錄
 

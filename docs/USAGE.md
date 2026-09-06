@@ -1,5 +1,7 @@
 # Aegis 使用方式
 
+開發與整合請參閱 [文件索引](README.md)、[技術架構](TECHNICAL.md)、[介面與資料契約](CONTRACTS.md) 與 [開發維運指南](DEVELOPMENT.md)。
+
 ## 前置需求
 
 - Go 1.24.2 以上（僅從原始碼建置時需要；發布流程使用 Go 1.26）

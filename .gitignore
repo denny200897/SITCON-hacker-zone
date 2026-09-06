@@ -1,0 +1,6 @@
+# Cross-compiled release binaries (produced by scripts/ or CI, attached to releases)
+/dist/
+
+# Run artifacts written under a scanned repo
+/out/
+out/run-*/

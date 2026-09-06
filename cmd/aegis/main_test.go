@@ -348,6 +348,43 @@ func TestDecodeReviewCandidatesRejectsCommentaryWithoutJSON(t *testing.T) {
 	}
 }
 
+func TestReviewerSemgrepDescriptionUsesExactRegisteredRuleIDs(t *testing.T) {
+	got := reviewerSemgrepDescription([]string{"z.rule", "py.sql.string-concat"}, true)
+	for _, want := range []string{"py.sql.string-concat", "z.rule", "never invent"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("description missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "sqli,") || strings.Contains(got, "sql-injection,") {
+		t.Fatalf("description should not present guessed aliases as allowed IDs: %s", got)
+	}
+}
+
+func TestReviewerToolDefsHideUnavailableSemgrep(t *testing.T) {
+	defs := []llm.ToolDef{
+		{Name: "read_code"},
+		{Name: "semgrep"},
+		{Name: "search_code"},
+	}
+	got := filterToolDefs(defs, "semgrep")
+	for _, def := range got {
+		if def.Name == "semgrep" {
+			t.Fatalf("semgrep should be filtered when unavailable: %+v", got)
+		}
+	}
+	if len(got) != 2 || got[0].Name != "read_code" || got[1].Name != "search_code" {
+		t.Fatalf("unexpected filtered defs: %+v", got)
+	}
+}
+
+func TestSemgrepRuleIDsAreStableAndSorted(t *testing.T) {
+	got := semgrepRuleIDs(map[string]string{"z.rule": "z.yml", "py.sql.string-concat": "py.yml"})
+	want := []string{"py.sql.string-concat", "z.rule"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("rule IDs = %v, want %v", got, want)
+	}
+}
+
 func TestAITracePersistsAndWatchesVisibleEvents(t *testing.T) {
 	dir := t.TempDir()
 	var terminal bytes.Buffer

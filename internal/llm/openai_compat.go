@@ -26,8 +26,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -362,13 +364,19 @@ func (a *OpenAICompatAdapter) post(ctx context.Context, payload []byte) (int, []
 	return httpResp.StatusCode, raw, nil
 }
 
-// postWithRetry retries only transient HTTP failures. 4xx responses other than
-// 429 are returned immediately, preserving the provider's deterministic error
-// classification; context cancellation always wins over the backoff.
+// postWithRetry retries transient HTTP and transport failures. 4xx responses
+// other than 429 are returned immediately, preserving the provider's
+// deterministic error classification; context cancellation always wins.
 func (a *OpenAICompatAdapter) postWithRetry(ctx context.Context, payload []byte) (int, []byte, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		status, raw, err := a.post(ctx, payload)
 		if err != nil {
+			if transientOpenAITransportError(ctx, err) && attempt < 2 {
+				if waitOpenAIRetry(ctx, attempt) != nil {
+					return 0, nil, ctx.Err()
+				}
+				continue
+			}
 			return status, raw, err
 		}
 		if status != http.StatusTooManyRequests && (status < 500 || status > 599) {
@@ -377,15 +385,33 @@ func (a *OpenAICompatAdapter) postWithRetry(ctx context.Context, payload []byte)
 		if attempt == 2 {
 			return status, raw, nil
 		}
-		t := time.NewTimer(time.Duration(50*(attempt+1)) * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			t.Stop()
+		if waitOpenAIRetry(ctx, attempt) != nil {
 			return 0, nil, ctx.Err()
-		case <-t.C:
 		}
 	}
 	return 0, nil, fmt.Errorf("llm: openai-compat retry state invalid")
+}
+
+func transientOpenAITransportError(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+func waitOpenAIRetry(ctx context.Context, attempt int) error {
+	t := time.NewTimer(time.Duration(250*(attempt+1)) * time.Millisecond)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // redactBody 把非 2xx 回應體做成 *Error.Body：先遮蔽金鑰（防供應商把 header

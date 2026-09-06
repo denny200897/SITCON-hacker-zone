@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +26,18 @@ type capturedReq struct {
 	ContentType   string
 	Body          []byte
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "operation timed out" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
+
+var _ net.Error = timeoutNetError{}
 
 // wireRequest 是對 capture body 的解碼視圖（Parameters 用 RawMessage 驗 verbatim）。
 type wireRequest struct {
@@ -359,6 +373,38 @@ func TestOpenAICompatHTTPErrorClassification(t *testing.T) {
 		if e.Body == "" {
 			t.Errorf("HTTP %d：Body 不應為空", status)
 		}
+	}
+}
+
+func TestOpenAICompatRetriesTransientTransportError(t *testing.T) {
+	calls := 0
+	a := NewOpenAICompat("openrouter", "https://openrouter.ai/api/v1", "test-key", "test-model")
+	a.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return nil, timeoutNetError{}
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"model":"test-model","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`,
+			)),
+			Request: r,
+		}, nil
+	})}
+
+	resp, err := a.Chat(context.Background(), ChatRequest{Model: "test-model", Messages: []Message{
+		{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}},
+	}})
+	if err != nil {
+		t.Fatalf("Chat should retry transient transport errors: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Fatalf("response = %+v", resp)
 	}
 }
 

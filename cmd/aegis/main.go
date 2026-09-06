@@ -204,6 +204,9 @@ func newReview() *cobra.Command {
 					if wErr := writeFindings(runDir, fresh); wErr != nil {
 						fmt.Fprintf(cmd.OutOrStdout(), "○ could not persist agent-built proofs — %v\n", wErr)
 					}
+					// The agent-built environment succeeded, so a failed pinned-pack
+					// environment prep is no longer what defines this review.
+					verificationErr = nil
 				}
 			}
 		}

@@ -199,11 +199,12 @@ func newReview() *cobra.Command {
 			return err
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "✓ [5/5] REPORT complete")
+		absoluteRunDir := absolutePath(runDir)
 		if verificationErr != nil {
-			fmt.Fprintf(cmd.OutOrStdout(), "\n✗ REVIEW INCOMPLETE — report generated, but verification failed\n  artifacts: %s\n", runDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "\n✗ REVIEW INCOMPLETE — report generated, but verification failed\n  artifacts: %s\n  report: %s\n", absoluteRunDir, filepath.Join(absoluteRunDir, "report.md"))
 			return verificationErr
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "\n✓ REVIEW COMPLETE\n  artifacts: %s\n", runDir)
+		fmt.Fprintf(cmd.OutOrStdout(), "\n✓ REVIEW COMPLETE\n  artifacts: %s\n  report: %s\n", absoluteRunDir, filepath.Join(absoluteRunDir, "report.md"))
 		return nil
 	}
 	return c
@@ -475,9 +476,10 @@ func newStage(name, short string) *cobra.Command {
 				return stageError(name, err)
 			}
 			if reviewerConfigured {
-				if watch {
-					fmt.Fprintln(cmd.OutOrStdout(), "▶ Starting global AI code review…")
-				}
+				// Always show the stage boundary. Without --watch the detailed
+				// agent/tool stream stays quiet, but the operator must still know
+				// that the process is waiting on the recon/reviewer LLM call.
+				fmt.Fprintln(cmd.OutOrStdout(), "▶ Starting global AI code review…")
 				llmCandidates, reviewErr := runLLMScan(scanCtx, root, snap.Dir, runDir, packDir, inv, pack)
 				if reviewErr != nil {
 					return stageError(name, reviewErr)
@@ -597,7 +599,7 @@ func newStage(name, short string) *cobra.Command {
 			if err := redaction.WriteFile(filepath.Join(runDir, "findings.json"), append(fb, '\n'), 0o644); err != nil {
 				return stageError(name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "scan complete: %d file(s), %d entrypoint(s), %d candidate(s)\nartifacts: %s\n", len(inv.Files), len(inv.Entrypoints), len(cs), runDir)
+			fmt.Fprintf(cmd.OutOrStdout(), "scan complete: %d file(s), %d entrypoint(s), %d candidate(s)\nartifacts: %s\n", len(inv.Files), len(inv.Entrypoints), len(cs), absolutePath(runDir))
 			return nil
 		}
 		if name == "report" {
@@ -673,7 +675,7 @@ func newStage(name, short string) *cobra.Command {
 			if _, err := j.Append("report_written", "", map[string]any{"artifacts": artifacts}); err != nil {
 				return stageError(name, err)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "report complete: %s\n", path)
+			fmt.Fprintf(cmd.OutOrStdout(), "report complete: %s\n", absolutePath(path))
 			return nil
 		}
 		if name == "replay" {
@@ -983,8 +985,16 @@ func runProveCommand(cmd *cobra.Command, args []string, opts proveOptions) error
 	if _, err := reporting.WriteFindings(opts.runDir, findings); err != nil {
 		return stageError("prove", err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "artifacts: %s\n", opts.runDir)
+	fmt.Fprintf(cmd.OutOrStdout(), "artifacts: %s\n", absolutePath(opts.runDir))
 	return nil
+}
+
+func absolutePath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
 }
 
 type environmentRecord struct {

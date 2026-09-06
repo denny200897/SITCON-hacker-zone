@@ -1,0 +1,1825 @@
+{
+  "snapshot_id": "SN-10f9e204ce1b",
+  "files": [
+    {
+      "path": "SPEC.md",
+      "bytes": 88290,
+      "language": "other",
+      "module": "SPEC"
+    },
+    {
+      "path": "bin/aegis",
+      "bytes": 41262066,
+      "language": "other",
+      "module": "bin.aegis"
+    },
+    {
+      "path": "cmd/aegis-observer-proxy/main.go",
+      "bytes": 703,
+      "language": "go",
+      "module": "cmd.aegis-observer-proxy.main"
+    },
+    {
+      "path": "cmd/aegis/main.go",
+      "bytes": 49432,
+      "language": "go",
+      "module": "cmd.aegis.main"
+    },
+    {
+      "path": "cmd/aegis/main_test.go",
+      "bytes": 15086,
+      "language": "go",
+      "module": "cmd.aegis.main_test"
+    },
+    {
+      "path": "cmd/aegis/prompts/prover-v1.txt",
+      "bytes": 650,
+      "language": "other",
+      "module": "cmd.aegis.prompts.prover-v1"
+    },
+    {
+      "path": "cmd/aegis/roles.go",
+      "bytes": 23075,
+      "language": "go",
+      "module": "cmd.aegis.roles"
+    },
+    {
+      "path": "cmd/aegis/trace.go",
+      "bytes": 8426,
+      "language": "go",
+      "module": "cmd.aegis.trace"
+    },
+    {
+      "path": "docs/CODE-REVIEW-2026-09-04.md",
+      "bytes": 18392,
+      "language": "other",
+      "module": "docs.CODE-REVIEW-2026-09-04"
+    },
+    {
+      "path": "docs/HANDOFF-2026-09-04-P001.md",
+      "bytes": 8546,
+      "language": "other",
+      "module": "docs.HANDOFF-2026-09-04-P001"
+    },
+    {
+      "path": "docs/HANDOFF-2026-09-04.md",
+      "bytes": 8881,
+      "language": "other",
+      "module": "docs.HANDOFF-2026-09-04"
+    },
+    {
+      "path": "docs/HANDOFF-RESULTS.md",
+      "bytes": 697,
+      "language": "other",
+      "module": "docs.HANDOFF-RESULTS"
+    },
+    {
+      "path": "docs/REVIEW-2026-09-05.md",
+      "bytes": 211610,
+      "language": "other",
+      "module": "docs.REVIEW-2026-09-05"
+    },
+    {
+      "path": "docs/USAGE.md",
+      "bytes": 7568,
+      "language": "other",
+      "module": "docs.USAGE"
+    },
+    {
+      "path": "docs/acceptance-m0a-m0c.md",
+      "bytes": 18013,
+      "language": "other",
+      "module": "docs.acceptance-m0a-m0c"
+    },
+    {
+      "path": "docs/adr/0001-m0a-trust-kernel.md",
+      "bytes": 2290,
+      "language": "other",
+      "module": "docs.adr.0001-m0a-trust-kernel"
+    },
+    {
+      "path": "docs/adr/0002-m0b-e2e.md",
+      "bytes": 6772,
+      "language": "other",
+      "module": "docs.adr.0002-m0b-e2e"
+    },
+    {
+      "path": "docs/adr/0003-m0c-agent-integration.md",
+      "bytes": 5644,
+      "language": "other",
+      "module": "docs.adr.0003-m0c-agent-integration"
+    },
+    {
+      "path": "docs/adr/0004-trusted-observer-and-replay.md",
+      "bytes": 1815,
+      "language": "other",
+      "module": "docs.adr.0004-trusted-observer-and-replay"
+    },
+    {
+      "path": "docs/adr/0005-split-container-trust-boundary.md",
+      "bytes": 6540,
+      "language": "other",
+      "module": "docs.adr.0005-split-container-trust-boundary"
+    },
+    {
+      "path": "docs/adr/0006-trusted-artifact-redaction.md",
+      "bytes": 4003,
+      "language": "other",
+      "module": "docs.adr.0006-trusted-artifact-redaction"
+    },
+    {
+      "path": "docs/threat-model.md",
+      "bytes": 6262,
+      "language": "other",
+      "module": "docs.threat-model"
+    },
+    {
+      "path": "embedded.go",
+      "bytes": 2754,
+      "language": "go",
+      "module": "embedded"
+    },
+    {
+      "path": "embedded_test.go",
+      "bytes": 993,
+      "language": "go",
+      "module": "embedded_test"
+    },
+    {
+      "path": "fixtures/vuln-sqli-001/app.py",
+      "bytes": 1377,
+      "language": "python",
+      "module": "fixtures.vuln-sqli-001.app"
+    },
+    {
+      "path": "fixtures/vuln-sqli-001/exploit.py",
+      "bytes": 1205,
+      "language": "python",
+      "module": "fixtures.vuln-sqli-001.exploit"
+    },
+    {
+      "path": "go.mod",
+      "bytes": 2899,
+      "language": "go-module",
+      "module": "go"
+    },
+    {
+      "path": "go.sum",
+      "bytes": 14074,
+      "language": "go-module",
+      "module": "go"
+    },
+    {
+      "path": "internal/agent/agent_test.go",
+      "bytes": 9720,
+      "language": "go",
+      "module": "internal.agent.agent_test"
+    },
+    {
+      "path": "internal/agent/audit.go",
+      "bytes": 3561,
+      "language": "go",
+      "module": "internal.agent.audit"
+    },
+    {
+      "path": "internal/agent/runtime.go",
+      "bytes": 5540,
+      "language": "go",
+      "module": "internal.agent.runtime"
+    },
+    {
+      "path": "internal/agent/runtime_test.go",
+      "bytes": 8320,
+      "language": "go",
+      "module": "internal.agent.runtime_test"
+    },
+    {
+      "path": "internal/agent/tools.go",
+      "bytes": 14531,
+      "language": "go",
+      "module": "internal.agent.tools"
+    },
+    {
+      "path": "internal/candidates/candidates.go",
+      "bytes": 5546,
+      "language": "go",
+      "module": "internal.candidates.candidates"
+    },
+    {
+      "path": "internal/candidates/candidates_test.go",
+      "bytes": 866,
+      "language": "go",
+      "module": "internal.candidates.candidates_test"
+    },
+    {
+      "path": "internal/candidates/merge_test.go",
+      "bytes": 1477,
+      "language": "go",
+      "module": "internal.candidates.merge_test"
+    },
+    {
+      "path": "internal/console/commands.go",
+      "bytes": 16082,
+      "language": "go",
+      "module": "internal.console.commands"
+    },
+    {
+      "path": "internal/console/console.go",
+      "bytes": 14855,
+      "language": "go",
+      "module": "internal.console.console"
+    },
+    {
+      "path": "internal/console/console_test.go",
+      "bytes": 17472,
+      "language": "go",
+      "module": "internal.console.console_test"
+    },
+    {
+      "path": "internal/credentials/credentials.go",
+      "bytes": 3069,
+      "language": "go",
+      "module": "internal.credentials.credentials"
+    },
+    {
+      "path": "internal/credentials/credentials_test.go",
+      "bytes": 16419,
+      "language": "go",
+      "module": "internal.credentials.credentials_test"
+    },
+    {
+      "path": "internal/credentials/filestore.go",
+      "bytes": 4725,
+      "language": "go",
+      "module": "internal.credentials.filestore"
+    },
+    {
+      "path": "internal/credentials/manager.go",
+      "bytes": 5820,
+      "language": "go",
+      "module": "internal.credentials.manager"
+    },
+    {
+      "path": "internal/credentials/memory_keyring.go",
+      "bytes": 1076,
+      "language": "go",
+      "module": "internal.credentials.memory_keyring"
+    },
+    {
+      "path": "internal/doctor/doctor.go",
+      "bytes": 27200,
+      "language": "go",
+      "module": "internal.doctor.doctor"
+    },
+    {
+      "path": "internal/doctor/doctor_test.go",
+      "bytes": 23549,
+      "language": "go",
+      "module": "internal.doctor.doctor_test"
+    },
+    {
+      "path": "internal/domain/domain.go",
+      "bytes": 5333,
+      "language": "go",
+      "module": "internal.domain.domain"
+    },
+    {
+      "path": "internal/domain/domain_test.go",
+      "bytes": 1517,
+      "language": "go",
+      "module": "internal.domain.domain_test"
+    },
+    {
+      "path": "internal/evidence/canonical.go",
+      "bytes": 2453,
+      "language": "go",
+      "module": "internal.evidence.canonical"
+    },
+    {
+      "path": "internal/evidence/canonical_test.go",
+      "bytes": 3607,
+      "language": "go",
+      "module": "internal.evidence.canonical_test"
+    },
+    {
+      "path": "internal/evidence/store.go",
+      "bytes": 7587,
+      "language": "go",
+      "module": "internal.evidence.store"
+    },
+    {
+      "path": "internal/evidence/store_test.go",
+      "bytes": 8346,
+      "language": "go",
+      "module": "internal.evidence.store_test"
+    },
+    {
+      "path": "internal/inventory/inventory.go",
+      "bytes": 17680,
+      "language": "go",
+      "module": "internal.inventory.inventory"
+    },
+    {
+      "path": "internal/inventory/inventory_test.go",
+      "bytes": 5878,
+      "language": "go",
+      "module": "internal.inventory.inventory_test"
+    },
+    {
+      "path": "internal/journal/journal.go",
+      "bytes": 9099,
+      "language": "go",
+      "module": "internal.journal.journal"
+    },
+    {
+      "path": "internal/journal/journal_test.go",
+      "bytes": 8704,
+      "language": "go",
+      "module": "internal.journal.journal_test"
+    },
+    {
+      "path": "internal/llm/anthropic.go",
+      "bytes": 12055,
+      "language": "go",
+      "module": "internal.llm.anthropic"
+    },
+    {
+      "path": "internal/llm/anthropic_test.go",
+      "bytes": 22703,
+      "language": "go",
+      "module": "internal.llm.anthropic_test"
+    },
+    {
+      "path": "internal/llm/llm.go",
+      "bytes": 4779,
+      "language": "go",
+      "module": "internal.llm.llm"
+    },
+    {
+      "path": "internal/llm/openai_compat.go",
+      "bytes": 16017,
+      "language": "go",
+      "module": "internal.llm.openai_compat"
+    },
+    {
+      "path": "internal/llm/openai_compat_test.go",
+      "bytes": 17277,
+      "language": "go",
+      "module": "internal.llm.openai_compat_test"
+    },
+    {
+      "path": "internal/observerproxy/proxy.go",
+      "bytes": 4176,
+      "language": "go",
+      "module": "internal.observerproxy.proxy"
+    },
+    {
+      "path": "internal/observerproxy/proxy_test.go",
+      "bytes": 1701,
+      "language": "go",
+      "module": "internal.observerproxy.proxy_test"
+    },
+    {
+      "path": "internal/oracles/oracles.go",
+      "bytes": 10877,
+      "language": "go",
+      "module": "internal.oracles.oracles"
+    },
+    {
+      "path": "internal/oracles/oracles_test.go",
+      "bytes": 14398,
+      "language": "go",
+      "module": "internal.oracles.oracles_test"
+    },
+    {
+      "path": "internal/orchestrator/agent_prover.go",
+      "bytes": 30528,
+      "language": "go",
+      "module": "internal.orchestrator.agent_prover"
+    },
+    {
+      "path": "internal/orchestrator/agent_prover_test.go",
+      "bytes": 22073,
+      "language": "go",
+      "module": "internal.orchestrator.agent_prover_test"
+    },
+    {
+      "path": "internal/orchestrator/astcheck_scratch_test.go",
+      "bytes": 1068,
+      "language": "go",
+      "module": "internal.orchestrator.astcheck_scratch_test"
+    },
+    {
+      "path": "internal/orchestrator/budget/budget.go",
+      "bytes": 9839,
+      "language": "go",
+      "module": "internal.orchestrator.budget.budget"
+    },
+    {
+      "path": "internal/orchestrator/budget/budget_test.go",
+      "bytes": 12788,
+      "language": "go",
+      "module": "internal.orchestrator.budget.budget_test"
+    },
+    {
+      "path": "internal/orchestrator/orchestrator.go",
+      "bytes": 16238,
+      "language": "go",
+      "module": "internal.orchestrator.orchestrator"
+    },
+    {
+      "path": "internal/orchestrator/orchestrator_split_test.go",
+      "bytes": 3275,
+      "language": "go",
+      "module": "internal.orchestrator.orchestrator_split_test"
+    },
+    {
+      "path": "internal/orchestrator/orchestrator_test.go",
+      "bytes": 7926,
+      "language": "go",
+      "module": "internal.orchestrator.orchestrator_test"
+    },
+    {
+      "path": "internal/orchestrator/policy/policy.go",
+      "bytes": 22218,
+      "language": "go",
+      "module": "internal.orchestrator.policy.policy"
+    },
+    {
+      "path": "internal/orchestrator/policy/policy_test.go",
+      "bytes": 17320,
+      "language": "go",
+      "module": "internal.orchestrator.policy.policy_test"
+    },
+    {
+      "path": "internal/orchestrator/policy/policy_wiring_test.go",
+      "bytes": 4370,
+      "language": "go",
+      "module": "internal.orchestrator.policy.policy_wiring_test"
+    },
+    {
+      "path": "internal/orchestrator/prove.go",
+      "bytes": 25466,
+      "language": "go",
+      "module": "internal.orchestrator.prove"
+    },
+    {
+      "path": "internal/orchestrator/replay.go",
+      "bytes": 7037,
+      "language": "go",
+      "module": "internal.orchestrator.replay"
+    },
+    {
+      "path": "internal/orchestrator/snapshot/snapshot.go",
+      "bytes": 13268,
+      "language": "go",
+      "module": "internal.orchestrator.snapshot.snapshot"
+    },
+    {
+      "path": "internal/orchestrator/snapshot/snapshot_test.go",
+      "bytes": 12368,
+      "language": "go",
+      "module": "internal.orchestrator.snapshot.snapshot_test"
+    },
+    {
+      "path": "internal/packs/packs.go",
+      "bytes": 17471,
+      "language": "go",
+      "module": "internal.packs.packs"
+    },
+    {
+      "path": "internal/packs/packs_test.go",
+      "bytes": 13375,
+      "language": "go",
+      "module": "internal.packs.packs_test"
+    },
+    {
+      "path": "internal/redaction/patterns.go",
+      "bytes": 2723,
+      "language": "go",
+      "module": "internal.redaction.patterns"
+    },
+    {
+      "path": "internal/redaction/redaction.go",
+      "bytes": 2764,
+      "language": "go",
+      "module": "internal.redaction.redaction"
+    },
+    {
+      "path": "internal/redaction/redaction_test.go",
+      "bytes": 11825,
+      "language": "go",
+      "module": "internal.redaction.redaction_test"
+    },
+    {
+      "path": "internal/redaction/write.go",
+      "bytes": 1019,
+      "language": "go",
+      "module": "internal.redaction.write"
+    },
+    {
+      "path": "internal/redaction/write_test.go",
+      "bytes": 1119,
+      "language": "go",
+      "module": "internal.redaction.write_test"
+    },
+    {
+      "path": "internal/reporting/report.go",
+      "bytes": 12907,
+      "language": "go",
+      "module": "internal.reporting.report"
+    },
+    {
+      "path": "internal/reporting/report_test.go",
+      "bytes": 5659,
+      "language": "go",
+      "module": "internal.reporting.report_test"
+    },
+    {
+      "path": "internal/sandbox/flags.go",
+      "bytes": 14052,
+      "language": "go",
+      "module": "internal.sandbox.flags"
+    },
+    {
+      "path": "internal/sandbox/flags_split_test.go",
+      "bytes": 5427,
+      "language": "go",
+      "module": "internal.sandbox.flags_split_test"
+    },
+    {
+      "path": "internal/sandbox/flags_test.go",
+      "bytes": 12842,
+      "language": "go",
+      "module": "internal.sandbox.flags_test"
+    },
+    {
+      "path": "internal/sandbox/observer.go",
+      "bytes": 3849,
+      "language": "go",
+      "module": "internal.sandbox.observer"
+    },
+    {
+      "path": "internal/sandbox/process_unix.go",
+      "bytes": 313,
+      "language": "go",
+      "module": "internal.sandbox.process_unix"
+    },
+    {
+      "path": "internal/sandbox/process_windows.go",
+      "bytes": 212,
+      "language": "go",
+      "module": "internal.sandbox.process_windows"
+    },
+    {
+      "path": "internal/sandbox/sandbox.go",
+      "bytes": 19773,
+      "language": "go",
+      "module": "internal.sandbox.sandbox"
+    },
+    {
+      "path": "internal/sandbox/sandbox_test.go",
+      "bytes": 21671,
+      "language": "go",
+      "module": "internal.sandbox.sandbox_test"
+    },
+    {
+      "path": "internal/sandbox/stage.go",
+      "bytes": 8404,
+      "language": "go",
+      "module": "internal.sandbox.stage"
+    },
+    {
+      "path": "internal/sandbox/stage_test.go",
+      "bytes": 4760,
+      "language": "go",
+      "module": "internal.sandbox.stage_test"
+    },
+    {
+      "path": "internal/schemav/schemav.go",
+      "bytes": 3200,
+      "language": "go",
+      "module": "internal.schemav.schemav"
+    },
+    {
+      "path": "internal/schemav/schemav_test.go",
+      "bytes": 3325,
+      "language": "go",
+      "module": "internal.schemav.schemav_test"
+    },
+    {
+      "path": "internal/settings/settings.go",
+      "bytes": 10491,
+      "language": "go",
+      "module": "internal.settings.settings"
+    },
+    {
+      "path": "internal/settings/settings_test.go",
+      "bytes": 9090,
+      "language": "go",
+      "module": "internal.settings.settings_test"
+    },
+    {
+      "path": "internal/triage/triage.go",
+      "bytes": 6423,
+      "language": "go",
+      "module": "internal.triage.triage"
+    },
+    {
+      "path": "internal/triage/triage_test.go",
+      "bytes": 2706,
+      "language": "go",
+      "module": "internal.triage.triage_test"
+    },
+    {
+      "path": "internal/tui/i18n.go",
+      "bytes": 4662,
+      "language": "go",
+      "module": "internal.tui.i18n"
+    },
+    {
+      "path": "internal/tui/logo.go",
+      "bytes": 3040,
+      "language": "go",
+      "module": "internal.tui.logo"
+    },
+    {
+      "path": "internal/tui/menu.go",
+      "bytes": 17771,
+      "language": "go",
+      "module": "internal.tui.menu"
+    },
+    {
+      "path": "internal/tui/tui.go",
+      "bytes": 15664,
+      "language": "go",
+      "module": "internal.tui.tui"
+    },
+    {
+      "path": "internal/tui/tui_test.go",
+      "bytes": 5339,
+      "language": "go",
+      "module": "internal.tui.tui_test"
+    },
+    {
+      "path": "memory/MEMORY.md",
+      "bytes": 152,
+      "language": "other",
+      "module": "memory.MEMORY"
+    },
+    {
+      "path": "packs/python-web/ast_helper/ast_check.py",
+      "bytes": 7053,
+      "language": "python",
+      "module": "packs.python-web.ast_helper.ast_check"
+    },
+    {
+      "path": "packs/python-web/detectors/py-sql-concat.yml",
+      "bytes": 1568,
+      "language": "config",
+      "module": "packs.python-web.detectors.py-sql-concat"
+    },
+    {
+      "path": "packs/python-web/image/Dockerfile",
+      "bytes": 1313,
+      "language": "dockerfile",
+      "module": "packs.python-web.image.Dockerfile"
+    },
+    {
+      "path": "packs/python-web/manifest.json",
+      "bytes": 3441,
+      "language": "config",
+      "module": "packs.python-web.manifest"
+    },
+    {
+      "path": "packs/python-web/oracles/sink.touch.sql.v1.json",
+      "bytes": 307,
+      "language": "config",
+      "module": "packs.python-web.oracles.sink.touch.sql.v1"
+    },
+    {
+      "path": "packs/python-web/oracles/sink.touch.sql_v1.json",
+      "bytes": 68,
+      "language": "config",
+      "module": "packs.python-web.oracles.sink.touch.sql_v1"
+    },
+    {
+      "path": "packs/python-web/oracles/sqli.error.v1.json",
+      "bytes": 513,
+      "language": "config",
+      "module": "packs.python-web.oracles.sqli.error.v1"
+    },
+    {
+      "path": "packs/python-web/oracles/sqli.error_v1.json",
+      "bytes": 63,
+      "language": "config",
+      "module": "packs.python-web.oracles.sqli.error_v1"
+    },
+    {
+      "path": "packs/python-web/sandbox/entrypoint.py",
+      "bytes": 4858,
+      "language": "python",
+      "module": "packs.python-web.sandbox.entrypoint"
+    },
+    {
+      "path": "packs/python-web/sandbox/seccomp.json",
+      "bytes": 1035,
+      "language": "config",
+      "module": "packs.python-web.sandbox.seccomp"
+    },
+    {
+      "path": "packs/python-web/sandbox/sitecustomize.py",
+      "bytes": 6655,
+      "language": "python",
+      "module": "packs.python-web.sandbox.sitecustomize"
+    },
+    {
+      "path": "packs/python-web/sandbox/target_harness.py",
+      "bytes": 2766,
+      "language": "python",
+      "module": "packs.python-web.sandbox.target_harness"
+    },
+    {
+      "path": "packs/python-web/templates/py-http-endpoint-witness-v3.py",
+      "bytes": 1177,
+      "language": "python",
+      "module": "packs.python-web.templates.py-http-endpoint-witness-v3"
+    },
+    {
+      "path": "schemas/candidate.schema.json",
+      "bytes": 1503,
+      "language": "config",
+      "module": "schemas.candidate.schema"
+    },
+    {
+      "path": "schemas/evidence.schema.json",
+      "bytes": 2763,
+      "language": "config",
+      "module": "schemas.evidence.schema"
+    },
+    {
+      "path": "schemas/finding.schema.json",
+      "bytes": 3077,
+      "language": "config",
+      "module": "schemas.finding.schema"
+    },
+    {
+      "path": "schemas/inventory.schema.json",
+      "bytes": 2390,
+      "language": "config",
+      "module": "schemas.inventory.schema"
+    },
+    {
+      "path": "schemas/journal_event.schema.json",
+      "bytes": 1191,
+      "language": "config",
+      "module": "schemas.journal_event.schema"
+    },
+    {
+      "path": "schemas/pack_manifest.schema.json",
+      "bytes": 5612,
+      "language": "config",
+      "module": "schemas.pack_manifest.schema"
+    },
+    {
+      "path": "schemas/run_request.schema.json",
+      "bytes": 4212,
+      "language": "config",
+      "module": "schemas.run_request.schema"
+    },
+    {
+      "path": "schemas/run_result.schema.json",
+      "bytes": 1872,
+      "language": "config",
+      "module": "schemas.run_result.schema"
+    },
+    {
+      "path": "schemas/settings.schema.json",
+      "bytes": 2694,
+      "language": "config",
+      "module": "schemas.settings.schema"
+    },
+    {
+      "path": "schemas/tools.schema.json",
+      "bytes": 1688,
+      "language": "config",
+      "module": "schemas.tools.schema"
+    },
+    {
+      "path": "schemas/triage.schema.json",
+      "bytes": 1232,
+      "language": "config",
+      "module": "schemas.triage.schema"
+    },
+    {
+      "path": "schemas/witness_spec.schema.json",
+      "bytes": 2630,
+      "language": "config",
+      "module": "schemas.witness_spec.schema"
+    },
+    {
+      "path": "tests/contracts/contracts_test.go",
+      "bytes": 3976,
+      "language": "go",
+      "module": "tests.contracts.contracts_test"
+    },
+    {
+      "path": "tests/e2e/m0c_prover_e2e_test.go",
+      "bytes": 7530,
+      "language": "go",
+      "module": "tests.e2e.m0c_prover_e2e_test"
+    },
+    {
+      "path": "tests/e2e/sqli_e2e_test.go",
+      "bytes": 15019,
+      "language": "go",
+      "module": "tests.e2e.sqli_e2e_test"
+    }
+  ],
+  "frameworks": [
+    "flask",
+    "gin",
+    "net/http"
+  ],
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "handler_file": "fixtures/vuln-sqli-001/app.py",
+      "handler_line": 32,
+      "handler_symbol": "healthz"
+    },
+    {
+      "method": "GET",
+      "path": "/users/\u003cname\u003e",
+      "handler_file": "fixtures/vuln-sqli-001/app.py",
+      "handler_line": 37,
+      "handler_symbol": "get_user"
+    },
+    {
+      "method": "POST",
+      "path": "/api/login",
+      "handler_file": "internal/inventory/inventory_test.go",
+      "handler_line": 107,
+      "handler_symbol": "loginHandler"
+    },
+    {
+      "method": "GET",
+      "path": "/healthz",
+      "handler_file": "packs/python-web/sandbox/target_harness.py",
+      "handler_line": 52,
+      "handler_symbol": "healthz"
+    },
+    {
+      "method": "GET",
+      "path": "/c/\u003cpath:payload\u003e",
+      "handler_file": "packs/python-web/sandbox/target_harness.py",
+      "handler_line": 56,
+      "handler_symbol": "call"
+    }
+  ],
+  "entrypoints": [
+    {
+      "kind": "env",
+      "file": "cmd/aegis/main.go",
+      "line": 1102,
+      "symbol": "AEGIS_CACHE_DIR"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 121,
+      "symbol": "filepath.Join(runDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 587,
+      "symbol": "filepath.Join(runDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 738,
+      "symbol": "filepath.Join(opts.runDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 786,
+      "symbol": "opts.specPath"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 811,
+      "symbol": "filepath.Join(schemasDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 815,
+      "symbol": "filepath.Join(schemasDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main.go",
+      "line": 1130,
+      "symbol": "filepath.Join(snapshotDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/main_test.go",
+      "line": 266,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/roles.go",
+      "line": 228,
+      "symbol": "filepath.Join(snapshotDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/roles.go",
+      "line": 249,
+      "symbol": "filepath.Join(schemasDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/roles.go",
+      "line": 253,
+      "symbol": "filepath.Join(schemasDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/roles.go",
+      "line": 409,
+      "symbol": "filepath.Join(snapshotDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/roles.go",
+      "line": 446,
+      "symbol": "filepath.Join(snapshotDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "cmd/aegis/roles.go",
+      "line": 507,
+      "symbol": "filepath.Join(runDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "embedded.go",
+      "line": 43,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "embedded.go",
+      "line": 53,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "embedded.go",
+      "line": 66,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "embedded_test.go",
+      "line": 16,
+      "symbol": "manifest"
+    },
+    {
+      "kind": "file_read",
+      "file": "embedded_test.go",
+      "line": 30,
+      "symbol": "filepath.Join(pack2"
+    },
+    {
+      "kind": "http_handler",
+      "file": "fixtures/vuln-sqli-001/app.py",
+      "line": 32,
+      "symbol": "healthz",
+      "detail": "GET /healthz"
+    },
+    {
+      "kind": "http_handler",
+      "file": "fixtures/vuln-sqli-001/app.py",
+      "line": 37,
+      "symbol": "get_user",
+      "detail": "GET /users/\u003cname\u003e"
+    },
+    {
+      "kind": "env",
+      "file": "fixtures/vuln-sqli-001/exploit.py",
+      "line": 17,
+      "symbol": "AEGIS_TARGET_URL"
+    },
+    {
+      "kind": "file_read",
+      "file": "fixtures/vuln-sqli-001/exploit.py",
+      "line": 15,
+      "symbol": "\"/aegis/payload.txt\""
+    },
+    {
+      "kind": "file_read",
+      "file": "fixtures/vuln-sqli-001/exploit.py",
+      "line": 20,
+      "symbol": "url"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/agent/agent_test.go",
+      "line": 261,
+      "symbol": "al.f.Name("
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/agent/tools.go",
+      "line": 206,
+      "symbol": "abs"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/agent/tools.go",
+      "line": 273,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/console/console_test.go",
+      "line": 402,
+      "symbol": "d.UserConfigPath"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/credentials/credentials_test.go",
+      "line": 192,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/credentials/filestore.go",
+      "line": 49,
+      "symbol": "f.Path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/credentials/filestore.go",
+      "line": 107,
+      "symbol": "f.Path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/doctor/doctor.go",
+      "line": 435,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store.go",
+      "line": 52,
+      "symbol": "last"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store.go",
+      "line": 129,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store.go",
+      "line": 161,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store.go",
+      "line": 216,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 30,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 78,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 115,
+      "symbol": "p1"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 142,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 162,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 207,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 215,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/evidence/store_test.go",
+      "line": 267,
+      "symbol": "mid"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/inventory/inventory.go",
+      "line": 135,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/inventory/inventory.go",
+      "line": 148,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/inventory/inventory.go",
+      "line": 161,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/inventory/inventory.go",
+      "line": 489,
+      "symbol": "filepath.Join(root"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/inventory/inventory.go",
+      "line": 510,
+      "symbol": "filepath.Join(root"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/inventory/inventory.go",
+      "line": 532,
+      "symbol": "filepath.Join(root"
+    },
+    {
+      "kind": "env",
+      "file": "internal/inventory/inventory_test.go",
+      "line": 104,
+      "symbol": "JWT_SECRET"
+    },
+    {
+      "kind": "http_handler",
+      "file": "internal/inventory/inventory_test.go",
+      "line": 107,
+      "symbol": "loginHandler",
+      "detail": "POST /api/login"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/observerproxy/proxy_test.go",
+      "line": 69,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/agent_prover.go",
+      "line": 612,
+      "symbol": "filepath.Join(artifactsDirFor(ap.RunDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/agent_prover.go",
+      "line": 755,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/orchestrator.go",
+      "line": 115,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/orchestrator.go",
+      "line": 138,
+      "symbol": "cachePath"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/orchestrator.go",
+      "line": 210,
+      "symbol": "out"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/orchestrator.go",
+      "line": 220,
+      "symbol": "out"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/prove.go",
+      "line": 458,
+      "symbol": "filepath.Join(artDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/prove.go",
+      "line": 575,
+      "symbol": "filepath.Join(artDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/replay.go",
+      "line": 39,
+      "symbol": "filepath.Join(ev.artifactsDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/replay.go",
+      "line": 49,
+      "symbol": "filepath.Join(ev.artifactsDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/replay.go",
+      "line": 126,
+      "symbol": "filepath.Join(evidenceDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/snapshot/snapshot_test.go",
+      "line": 15,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/orchestrator/snapshot/snapshot_test.go",
+      "line": 234,
+      "symbol": "filepath.Join(s.Dir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/packs/packs.go",
+      "line": 208,
+      "symbol": "manifestPath"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/packs/packs.go",
+      "line": 372,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/redaction/write_test.go",
+      "line": 32,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report.go",
+      "line": 223,
+      "symbol": "filepath.Join(runDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report_test.go",
+      "line": 36,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report_test.go",
+      "line": 58,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report_test.go",
+      "line": 98,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report_test.go",
+      "line": 124,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report_test.go",
+      "line": 136,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/reporting/report_test.go",
+      "line": 160,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/sandbox/sandbox_test.go",
+      "line": 451,
+      "symbol": "filepath.Join(destDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/schemav/schemav.go",
+      "line": 52,
+      "symbol": "filepath.Join(dir"
+    },
+    {
+      "kind": "env",
+      "file": "internal/settings/settings.go",
+      "line": 237,
+      "symbol": "XDG_CONFIG_HOME"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/settings/settings.go",
+      "line": 109,
+      "symbol": "path"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/settings/settings_test.go",
+      "line": 114,
+      "symbol": "p1"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/settings/settings_test.go",
+      "line": 118,
+      "symbol": "p2"
+    },
+    {
+      "kind": "file_read",
+      "file": "internal/triage/triage.go",
+      "line": 79,
+      "symbol": "filepath.Join(snapshotDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/ast_helper/ast_check.py",
+      "line": 99,
+      "symbol": "args.out"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 27,
+      "symbol": "AEGIS_SERVICE_PORT"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 28,
+      "symbol": "AEGIS_HEALTH_PATH"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 41,
+      "symbol": "AEGIS_SERVICE_CMD"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 78,
+      "symbol": "AEGIS_ROLE"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 82,
+      "symbol": "AEGIS_TARGET_URL"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 30,
+      "symbol": "RUN_LOG"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 46,
+      "symbol": "cmd"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 48,
+      "symbol": "os.path.join(OUT_DIR"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/sandbox/entrypoint.py",
+      "line": 59,
+      "symbol": "url"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/sitecustomize.py",
+      "line": 29,
+      "symbol": "AEGIS_SQL_TRACE"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/sitecustomize.py",
+      "line": 111,
+      "symbol": "AEGIS_OBSERVER_ADDR"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/sandbox/sitecustomize.py",
+      "line": 44,
+      "symbol": "_TRACE_PATH"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/target_harness.py",
+      "line": 24,
+      "symbol": "AEGIS_TARGET_BINDING"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/sandbox/target_harness.py",
+      "line": 26,
+      "symbol": "AEGIS_SERVICE_PORT"
+    },
+    {
+      "kind": "file_read",
+      "file": "packs/python-web/sandbox/target_harness.py",
+      "line": 31,
+      "symbol": "BINDING_PATH"
+    },
+    {
+      "kind": "http_handler",
+      "file": "packs/python-web/sandbox/target_harness.py",
+      "line": 52,
+      "symbol": "healthz",
+      "detail": "GET /healthz"
+    },
+    {
+      "kind": "http_handler",
+      "file": "packs/python-web/sandbox/target_harness.py",
+      "line": 56,
+      "symbol": "call",
+      "detail": "GET /c/\u003cpath:payload\u003e"
+    },
+    {
+      "kind": "env",
+      "file": "packs/python-web/templates/py-http-endpoint-witness-v3.py",
+      "line": 21,
+      "symbol": "AEGIS_SERVICE_PORT"
+    },
+    {
+      "kind": "file_read",
+      "file": "tests/contracts/contracts_test.go",
+      "line": 47,
+      "symbol": "filepath.Join(root"
+    },
+    {
+      "kind": "file_read",
+      "file": "tests/e2e/m0c_prover_e2e_test.go",
+      "line": 39,
+      "symbol": "filepath.Join(schemasDir"
+    },
+    {
+      "kind": "file_read",
+      "file": "tests/e2e/m0c_prover_e2e_test.go",
+      "line": 43,
+      "symbol": "filepath.Join(schemasDir"
+    },
+    {
+      "kind": "env",
+      "file": "tests/e2e/sqli_e2e_test.go",
+      "line": 76,
+      "symbol": "AEGIS_E2E_KEEP"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "github.com/atotto/clipboard",
+      "version": "v0.1.4",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/bubbles",
+      "version": "v1.0.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/bubbletea",
+      "version": "v1.3.10",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/lipgloss",
+      "version": "v1.1.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/x/ansi",
+      "version": "v0.11.6",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/lucasb-eyer/go-colorful",
+      "version": "v1.3.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/santhosh-tekuri/jsonschema/v6",
+      "version": "v6.0.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/aymanbagabas/go-osc52/v2",
+      "version": "v2.0.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/colorprofile",
+      "version": "v0.4.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/x/cellbuf",
+      "version": "v0.0.15",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/charmbracelet/x/term",
+      "version": "v0.2.2",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/clipperhouse/displaywidth",
+      "version": "v0.9.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/clipperhouse/stringish",
+      "version": "v0.1.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/clipperhouse/uax29/v2",
+      "version": "v2.5.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/erikgeiser/coninput",
+      "version": "v0.0.0-20211004153227-1c3628e74d0f",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/mattn/go-localereader",
+      "version": "v0.0.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/mattn/go-runewidth",
+      "version": "v0.0.19",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/muesli/ansi",
+      "version": "v0.0.0-20230316100256-276c6243b2f6",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/muesli/cancelreader",
+      "version": "v0.2.2",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/muesli/termenv",
+      "version": "v0.16.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/rivo/uniseg",
+      "version": "v0.4.7",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/xo/terminfo",
+      "version": "v0.0.0-20220910002029-abceb7e1c41e",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/BurntSushi/toml",
+      "version": "v1.4.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/alessio/shellescape",
+      "version": "v1.4.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/anthropics/anthropic-sdk-go",
+      "version": "v1.70.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/bahlo/generic-list-go",
+      "version": "v0.2.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/buger/jsonparser",
+      "version": "v1.1.2",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/danieljoos/wincred",
+      "version": "v1.2.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/dustin/go-humanize",
+      "version": "v1.0.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/godbus/dbus/v5",
+      "version": "v5.1.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/google/uuid",
+      "version": "v1.6.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/hashicorp/golang-lru/v2",
+      "version": "v2.0.7",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/inconshreveable/mousetrap",
+      "version": "v1.1.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/invopop/jsonschema",
+      "version": "v0.14.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/mattn/go-isatty",
+      "version": "v0.0.20",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/ncruces/go-strftime",
+      "version": "v0.1.9",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/pb33f/ordered-map/v2",
+      "version": "v2.3.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/remyoudompheng/bigfft",
+      "version": "v0.0.0-20230129092748-24d4a6f8daec",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/spf13/cobra",
+      "version": "v1.8.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/spf13/pflag",
+      "version": "v1.0.5",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/standard-webhooks/standard-webhooks/libraries",
+      "version": "v0.0.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/tidwall/gjson",
+      "version": "v1.18.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/tidwall/match",
+      "version": "v1.1.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/tidwall/pretty",
+      "version": "v1.2.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/tidwall/sjson",
+      "version": "v1.2.5",
+      "source": "go.mod"
+    },
+    {
+      "name": "github.com/zalando/go-keyring",
+      "version": "v0.2.5",
+      "source": "go.mod"
+    },
+    {
+      "name": "go.yaml.in/yaml/v4",
+      "version": "v4.0.0-rc.2",
+      "source": "go.mod"
+    },
+    {
+      "name": "golang.org/x/sync",
+      "version": "v0.16.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "golang.org/x/sys",
+      "version": "v0.38.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "golang.org/x/term",
+      "version": "v0.34.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "golang.org/x/text",
+      "version": "v0.27.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/gc/v3",
+      "version": "v3.0.0-20240107210532-573471604cb6",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/libc",
+      "version": "v1.55.3",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/mathutil",
+      "version": "v1.6.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/memory",
+      "version": "v1.8.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/sqlite",
+      "version": "v1.34.1",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/strutil",
+      "version": "v1.2.0",
+      "source": "go.mod"
+    },
+    {
+      "name": "modernc.org/token",
+      "version": "v1.1.0",
+      "source": "go.mod"
+    }
+  ],
+  "notes": [
+    "requirements.txt 不存在或不可讀"
+  ]
+}

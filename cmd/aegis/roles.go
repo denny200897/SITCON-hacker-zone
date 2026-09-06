@@ -72,15 +72,22 @@ type reviewCandidate struct {
 func decodeReviewCandidates(text string) ([]reviewCandidate, error) {
 	var lastErr error
 	for _, payload := range reviewJSONPayloads(text) {
-		var direct []reviewCandidate
-		if err := json.Unmarshal([]byte(payload), &direct); err == nil {
-			return direct, nil
-		}
 		var wrapped struct {
 			Candidates []reviewCandidate `json:"candidates"`
 			Findings   []reviewCandidate `json:"findings"`
 		}
-		if err := json.Unmarshal([]byte(payload), &wrapped); err != nil {
+		var direct []reviewCandidate
+		if strings.HasPrefix(strings.TrimSpace(payload), "[") {
+			if err := json.Unmarshal([]byte(payload), &direct); err == nil {
+				return direct, nil
+			} else {
+				lastErr = err
+			}
+			if err := json.Unmarshal([]byte(payload), &wrapped); err != nil {
+				lastErr = err
+				continue
+			}
+		} else if err := json.Unmarshal([]byte(payload), &wrapped); err != nil {
 			lastErr = err
 			continue
 		}
@@ -411,13 +418,25 @@ func runLLMScan(ctx context.Context, repoRoot, snapshotDir, runDir, packDir stri
 			fmt.Sprintf("Synthesizing and deduplicating %d cross-file candidate(s)", len(raw)))
 		rawJSON, _ := json.Marshal(raw)
 		prompt := fmt.Sprintf("Perform a whole-repo global security synthesis over the candidates below. Merge duplicates, drop any without a real attack chain, and keep distinct root causes; you may strengthen chain/evidence from cross-file relationships, but never invent files or line numbers that do not exist. Output a JSON object: analysis_summary is a public global judgement summary, candidates is an array with the same fields; no markdown. inventory: %s\ncandidates: %s", invJSON, rawJSON)
-		text, synthErr := roleText(withAIPhase(ctx, "global-synthesis"), reviewer, llm.RoleReviewer, reviewerModel, "You are a cross-file attack-chain synthesizer. Every conclusion must be anchored to file:line evidence present in the input; never drop a valid vulnerability just because the proof pack does not support it.", prompt, "high")
-		if synthErr != nil {
-			return nil, fmt.Errorf("reviewer global synthesis failed: %w", synthErr)
+		var synthesized []reviewCandidate
+		var synthErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			synthPrompt := prompt
+			if attempt > 0 {
+				synthPrompt += fmt.Sprintf("\n\nYour previous response was rejected as invalid structured JSON: %v. Retry now. Return exactly one valid JSON object with an analysis_summary string and a candidates array; do not use markdown fences, comments, or trailing commas.", synthErr)
+			}
+			text, callErr := roleText(withAIPhase(ctx, "global-synthesis"), reviewer, llm.RoleReviewer, reviewerModel, "You are a cross-file attack-chain synthesizer. Every conclusion must be anchored to file:line evidence present in the input; never drop a valid vulnerability just because the proof pack does not support it.", synthPrompt, "high")
+			if callErr != nil {
+				synthErr = callErr
+				continue
+			}
+			synthesized, synthErr = decodeReviewCandidates(text)
+			if synthErr == nil {
+				break
+			}
 		}
-		synthesized, err := decodeReviewCandidates(text)
-		if err != nil {
-			return nil, fmt.Errorf("reviewer global synthesis is not normalizable structured JSON: %w", err)
+		if synthErr != nil {
+			return nil, fmt.Errorf("reviewer global synthesis is not normalizable structured JSON after 3 attempts: %w", synthErr)
 		}
 		raw = synthesized
 		emitAITrace(withAIPhase(ctx, "global-synthesis"), string(llm.RoleReviewer), "workflow",

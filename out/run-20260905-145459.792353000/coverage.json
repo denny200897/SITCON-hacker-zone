@@ -1,0 +1,50 @@
+{
+  "pack_id": "python-web",
+  "pack_version": "1.0.0",
+  "verifiable_extensions": [
+    ".py"
+  ],
+  "proof_runtime_extensions": [
+    ".py"
+  ],
+  "target_extensions": [
+    ".go",
+    ".json",
+    ".py",
+    ".yml"
+  ],
+  "target_languages": [
+    "config",
+    "go",
+    "python"
+  ],
+  "matched_extensions": [
+    ".py"
+  ],
+  "uncovered_extensions": [
+    ".go",
+    ".json",
+    ".yml"
+  ],
+  "detector_ids": [
+    "py.sql.string-concat"
+  ],
+  "detector_languages": [
+    "python"
+  ],
+  "executed_detector_ids": null,
+  "detector_notes": [
+    "semgrep unavailable; LLM fallback used"
+  ],
+  "sink_types": [
+    "cmd.shell",
+    "deserialization.yaml",
+    "sql.concat",
+    "ssrf.url"
+  ],
+  "proof_families": [
+    "sqli"
+  ],
+  "llm_reviewer_configured": true,
+  "discovery_mode": "llm-global-review+detectors"
+}

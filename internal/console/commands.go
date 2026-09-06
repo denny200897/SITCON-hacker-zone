@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -46,6 +48,46 @@ func (s *session) cmdProviderList() error {
 	}
 	s.renderProviders(repo, user)
 	return nil
+}
+
+// cmdLastResult displays the most recent completed scan/review artifacts
+// without starting another pipeline.
+func (s *session) cmdLastResult() error {
+	root := filepath.Dir(s.deps.RepoConfigPath)
+	runDir := latestRunDir(root)
+	if runDir == "" {
+		return errors.New("no previous scan result found; run /review first")
+	}
+	for _, name := range []string{"report.md", "findings.json"} {
+		path := filepath.Join(runDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		absoluteRun, _ := filepath.Abs(runDir)
+		absolutePath, _ := filepath.Abs(path)
+		fmt.Fprintf(s.out, "\nlast scan result: %s\nartifact: %s\n\n%s\n", absoluteRun, absolutePath, data)
+		return nil
+	}
+	return fmt.Errorf("latest run has no report artifacts: %s", runDir)
+}
+
+func latestRunDir(root string) string {
+	entries, err := os.ReadDir(filepath.Join(root, "out"))
+	if err != nil {
+		return ""
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "run-") {
+			names = append(names, entry.Name())
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return filepath.Join(root, "out", names[len(names)-1])
 }
 
 // renderProviders 輸出供應商表（/provider list 與 /status 共用）。
@@ -93,10 +135,11 @@ const openRouterBaseURL = "https://openrouter.ai/api/v1"
 // settings.toml（§3.3：供應商定義無內建，全在使用者層管理）。
 //
 // ASK（§23-9）：兩個互動細節 spec 未規定——
-//   (1) 名稱已存在（user 層或與 repo aegis.toml 撞名）時：採「拒絕並提示先
-//       remove」；選項 (b) 覆寫既有定義、(c) 要求確認後覆寫。
-//   (2) type 輸入不在閉集時：採「輸出錯誤、中止本次 add（不迴圈追問）」，
-//       避免 EOF／管道情境卡死；選項 (b) 迴圈重問直到合法或 EOF。
+//
+//	(1) 名稱已存在（user 層或與 repo aegis.toml 撞名）時：採「拒絕並提示先
+//	    remove」；選項 (b) 覆寫既有定義、(c) 要求確認後覆寫。
+//	(2) type 輸入不在閉集時：採「輸出錯誤、中止本次 add（不迴圈追問）」，
+//	    避免 EOF／管道情境卡死；選項 (b) 迴圈重問直到合法或 EOF。
 func (s *session) cmdProviderAdd(name string) error {
 	if name == "" || strings.ContainsAny(name, " \t") {
 		return errors.New("provider name must not be empty or contain whitespace")
@@ -191,7 +234,7 @@ func (s *session) cmdProviderRemove(name string) error {
 
 // cmdKeySet 隱藏輸入金鑰並儲存（§3.3 /key set）：ReadSecret 取 token（永不回顯、
 // 輸出永不印內容），credentials.Manager.Set 寫 OS keychain、不可用時退回檔案
-//（0600）。只印成功訊息與儲存位置。
+// （0600）。只印成功訊息與儲存位置。
 func (s *session) cmdKeySet(providerName string) error {
 	repo, user, err := s.loadConfigs()
 	if err != nil {
@@ -259,7 +302,7 @@ func lookupProvider(repo, user *settings.Config, name string) (settings.Provider
 }
 
 // cmdModelList 檢視角色路由（§3.3）：每個 role 顯示解析後的引用與來源層
-//（§3.1：repo aegis.toml > 使用者 settings.toml；兩層皆無 → 未設定）。
+// （§3.1：repo aegis.toml > 使用者 settings.toml；兩層皆無 → 未設定）。
 func (s *session) cmdModelList() error {
 	repo, user, err := s.loadConfigs()
 	if err != nil {
@@ -290,7 +333,7 @@ const modelSetAll = "all"
 
 // cmdModelSet 覆寫角色路由（§3.3：寫入使用者層級設定）。驗證序：
 // role 閉集（§3.1 五角色；或 "all" 一次設定全部五角色）→ settings.ValidateRef
-//（§3.1 引用語法）→ 供應商必須存在於 repo 或 user 任一層。
+// （§3.1 引用語法）→ 供應商必須存在於 repo 或 user 任一層。
 // "all" 僅展開成五個角色鍵寫入，同一引用對每個角色皆相同——成本分層（§3.1：
 // 機械性工作用便宜模型、證明用最強模型）的使用者之後仍可逐一覆寫單一角色。
 func (s *session) cmdModelSet(role, ref string) error {

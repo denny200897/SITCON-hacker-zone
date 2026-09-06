@@ -209,6 +209,8 @@ func (s *session) dispatch(line string) error {
 		return s.cmdStatus(s.ctx)
 	case "/doctor":
 		return s.cmdDoctor(s.ctx)
+	case "/last":
+		return s.cmdLastResult()
 	case "/review", "/scan", "/prove", "/report", "/replay":
 		if s.deps.RunCommand == nil {
 			return errors.New("pipeline command not wired")
@@ -368,6 +370,7 @@ func (s *session) cmdHelp() {
   /model reset                                clear user-level model overrides
   /status                                     provider, key, routing, and Docker status
   /doctor                                     health check (Docker, images, provider connectivity)
+  /last                                       show the most recent scan/review result
   /review [repo] [flags]                      scan, prove, replay, and report in one command (recommended entry point)
   /scan [flags]                               scan the target repo only (advanced / debugging)
   /prove [F-ID] [flags]                       prove a finding; omit the ID to process all

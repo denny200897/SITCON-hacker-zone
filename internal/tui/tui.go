@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -22,19 +24,19 @@ import (
 // dispatcher. English is the default; /lang en|zh changes and persists it.
 func Run(deps console.Deps) error {
 	m := newModel(deps)
-	// Enable wheel events so the output viewport can be browsed without leaving
-	// the full-screen interface. Keyboard scrolling remains available too.
+	// Keep the CLI chrome fixed while routing wheel events to the output
+	// viewport. Hold Shift/Option while dragging to let the terminal select text.
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
 
 type (
-	outputMsg     string
-	doneMsg       error
-	secretMsg     string
-	approvalMsg   approval.BuildRequest
-	copyResultMsg struct{ err error }
+	outputMsg   string
+	doneMsg     error
+	secretMsg   string
+	approvalMsg approval.BuildRequest
+	spinnerMsg  struct{}
 )
 
 type model struct {
@@ -45,12 +47,16 @@ type model struct {
 
 	transcript   strings.Builder
 	pipeW        *io.PipeWriter
+	pipeMu       sync.Mutex
 	outCh        chan string
 	doneCh       chan error
 	secretReq    chan string
 	secretResp   chan string
 	approvalReq  chan approval.BuildRequest
 	approvalResp chan approval.Decision
+	selection    *mouseSelection
+	activity     bool
+	spinnerIndex int
 
 	settingsPath   string
 	lang           language
@@ -61,6 +67,20 @@ type model struct {
 
 	menu   *menuNode // the action menu shown at the bottom
 	wizard *wizard   // active guided prompt, or nil
+}
+
+type mouseSelection struct {
+	startY, endY       int
+	startLine, endLine int
+	final              bool
+}
+
+type selectionTickMsg struct{ selection *mouseSelection }
+
+func selectionTick(selection *mouseSelection) tea.Cmd {
+	return tea.Tick(60*time.Millisecond, func(time.Time) tea.Msg {
+		return selectionTickMsg{selection}
+	})
 }
 
 func newModel(deps console.Deps) *model {
@@ -101,7 +121,7 @@ func newModel(deps console.Deps) *model {
 	// submenus and guided choices then use ↑↓ + Enter.
 	m.menu = nil
 	// The banner is chrome, not conversation: it is rendered by syncViewport,
-	// so it stays out of the transcript that /copy captures.
+	// so it stays out of the transcript that the terminal can select.
 	return m
 }
 
@@ -114,16 +134,43 @@ func (m *model) waitDone() tea.Cmd     { return func() tea.Msg { return doneMsg(
 func (m *model) waitSecret() tea.Cmd   { return func() tea.Msg { return secretMsg(<-m.secretReq) } }
 func (m *model) waitApproval() tea.Cmd { return func() tea.Msg { return approvalMsg(<-m.approvalReq) } }
 
+func (m *model) startActivity() tea.Cmd {
+	m.activity = true
+	m.spinnerIndex = 0
+	m.resize()
+	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return spinnerMsg{} })
+}
+
+func (m *model) stopActivity() {
+	if m.activity {
+		m.activity = false
+		m.resize()
+	}
+}
+
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var commands []tea.Cmd
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.layout()
+	case selectionTickMsg:
+		if m.selection == msg.selection && m.selection != nil && !m.selection.final {
+			m.scrollSelection()
+			commands = append(commands, selectionTick(m.selection))
+		}
 	case tea.MouseMsg:
-		var command tea.Cmd
-		m.vp, command = m.vp.Update(msg)
-		commands = append(commands, command)
+		if tea.MouseEvent(msg).IsWheel() {
+			var command tea.Cmd
+			m.vp, command = m.vp.Update(msg)
+			commands = append(commands, command)
+			break
+		}
+		previous := m.selection
+		m.handleMouseSelection(msg)
+		if m.selection != nil && m.selection != previous {
+			commands = append(commands, selectionTick(m.selection))
+		}
 	case tea.KeyMsg:
 		if m.approval != nil {
 			return m.updateApproval(msg)
@@ -146,8 +193,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// free-text wizard steps fall through to the input field
 		default:
 			switch msg.String() {
-			case "ctrl+y":
-				return m, m.copyTranscript()
 			case "up":
 				if m.menu != nil {
 					m.menuMove(-1)
@@ -178,7 +223,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !strings.HasPrefix(line, "aegis interactive mode") {
 			m.appendRaw(line)
 		}
+		if activityFinished(line) {
+			m.stopActivity()
+		}
 		commands = append(commands, m.waitOutput())
+	case spinnerMsg:
+		if m.activity {
+			m.spinnerIndex = (m.spinnerIndex + 1) % len(spinnerFrames)
+			commands = append(commands, tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return spinnerMsg{} }))
+		}
 	case secretMsg:
 		m.inSecret = true
 		m.ti.EchoMode = textinput.EchoPassword
@@ -195,12 +248,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		if !m.exiting {
 			return m, tea.Quit
-		}
-	case copyResultMsg:
-		if msg.err != nil {
-			m.appendLine(errorStyle.Render(translations[m.lang].copyError + msg.err.Error()))
-		} else {
-			m.appendLine(successStyle.Render(translations[m.lang].copySuccess))
 		}
 	}
 	if _, ok := msg.(tea.KeyMsg); ok || m.ready {
@@ -274,9 +321,6 @@ func (m *model) submit() tea.Cmd {
 		m.showHelp()
 		return nil
 	}
-	if trimmed == "/copy" {
-		return m.copyTranscript()
-	}
 	if trimmed == "/clear" {
 		m.clearScreen()
 		return nil
@@ -292,8 +336,29 @@ func (m *model) submit() tea.Cmd {
 	// Interactive reviews expose the public AI response and tool-event stream by
 	// default. The plain CLI remains opt-in through --watch.
 	trimmed = addWatchFlag(trimmed)
-	go func() { _, _ = io.WriteString(m.pipeW, trimmed+"\n") }()
-	return nil
+	return tea.Batch(m.startActivity(), func() tea.Msg {
+		m.writeLines(trimmed)
+		return nil
+	})
+}
+
+func activityFinished(line string) bool {
+	for _, marker := range []string{"✓ REVIEW COMPLETE", "✗ REVIEW INCOMPLETE", "scan complete:", "report complete:", "replay verification passed:", "STAGE FAILED:"} {
+		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (m *model) writeLines(lines ...string) {
+	m.pipeMu.Lock()
+	defer m.pipeMu.Unlock()
+	for _, line := range lines {
+		_, _ = io.WriteString(m.pipeW, line+"\n")
+	}
 }
 
 // handleMainCommand enters the guided UI for an exact top-level command.
@@ -320,6 +385,8 @@ func rootCommandName(index int, command string) bool {
 	aliases := [...]map[string]bool{
 		{"review": true},
 		{"scan": true},
+		{"last": true, "previous": true},
+		{"open": true, "open-report": true},
 		{"provider": true, "providers": true},
 		{"model": true, "models": true},
 		{"status": true},
@@ -384,11 +451,6 @@ func (m *model) clearScreen() {
 	m.transcript.Reset()
 	m.menu = nil
 	m.syncViewport()
-}
-
-func (m *model) copyTranscript() tea.Cmd {
-	plainText := ansi.Strip(m.transcript.String())
-	return func() tea.Msg { return copyResultMsg{err: writeClipboard(plainText)} }
 }
 
 func (m *model) showHelp() {
@@ -475,10 +537,106 @@ func (m *model) syncViewport() {
 		return
 	}
 	wasAtBottom := m.vp.AtBottom()
-	m.vp.SetContent(m.header() + "\n\n" + m.wrap(m.transcript.String()))
+	content := m.header() + "\n\n" + m.wrap(m.transcript.String())
+	if m.selection != nil {
+		content = m.highlightSelection(content)
+	}
+	m.vp.SetContent(content)
 	if wasAtBottom {
 		m.vp.GotoBottom()
 	}
+}
+
+// handleMouseSelection makes selection work consistently even when the
+// terminal emulator does not support native selection inside an alternate
+// screen. The selected output is copied when the drag ends.
+func (m *model) handleMouseSelection(msg tea.MouseMsg) {
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		if msg.Y < 2 || msg.Y >= 2+m.vp.Height {
+			return
+		}
+		m.selection = &mouseSelection{startY: msg.Y, endY: msg.Y,
+			startLine: msg.Y - 2 + m.vp.YOffset}
+		m.syncViewport()
+		return
+	}
+	if m.selection == nil || m.selection.final {
+		return
+	}
+	if msg.Action == tea.MouseActionMotion || msg.Action == tea.MouseActionRelease {
+		m.selection.endY = msg.Y
+		m.syncViewport()
+	}
+	if msg.Action == tea.MouseActionRelease {
+		_ = clipboard.WriteAll(m.selectedOutput())
+		m.selection.startLine, m.selection.endLine = m.selectionLines()
+		m.selection.final = true
+		m.syncViewport()
+	}
+}
+
+// Anchor the start in document coordinates while the pointer extends the end.
+// Tick even without pointer movement so holding at an edge keeps scrolling.
+func (m *model) scrollSelection() {
+	if m.selection == nil || m.selection.final {
+		return
+	}
+	if m.selection.endY <= 2 {
+		m.vp.ScrollUp(1)
+	} else if m.selection.endY >= 2+m.vp.Height-1 {
+		m.vp.ScrollDown(1)
+	} else {
+		return
+	}
+	m.syncViewport()
+}
+
+func (m *model) selectionLines() (int, int) {
+	content := ansi.Strip(m.header() + "\n\n" + m.wrap(m.transcript.String()))
+	lines := strings.Split(content, "\n")
+	const viewportTop = 2
+	start := m.selection.startLine
+	end := clamp(m.selection.endY-viewportTop, 0, max(m.vp.Height-1, 0)) + m.vp.YOffset
+	if start > end {
+		start, end = end, start
+	}
+	return clamp(start, 0, max(len(lines)-1, 0)), clamp(end, 0, max(len(lines)-1, 0))
+}
+
+func (m *model) selectedOutput() string {
+	content := ansi.Strip(m.header() + "\n\n" + m.wrap(m.transcript.String()))
+	lines := strings.Split(content, "\n")
+	start, end := m.selectionLines()
+	if m.selection.final {
+		start, end = m.selection.startLine, m.selection.endLine
+	}
+	if start >= len(lines) || end < 0 {
+		return ""
+	}
+	return strings.Join(lines[start:end+1], "\n")
+}
+
+func (m *model) highlightSelection(content string) string {
+	lines := strings.Split(content, "\n")
+	start, end := m.selectionLines()
+	if m.selection.final {
+		start, end = m.selection.startLine, m.selection.endLine
+	}
+	selectionStyle := lipgloss.NewStyle().Background(lipgloss.Color("#285A73")).Foreground(lipgloss.Color("#FFFFFF"))
+	for i := start; i <= end && i < len(lines); i++ {
+		lines[i] = selectionStyle.Render(lines[i])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clamp(value, low, high int) int {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
 }
 
 // header is the left-aligned banner (logo, tagline, hint) shown at the top of
@@ -650,5 +808,3 @@ func (w chanWriter) Write(p []byte) (int, error) {
 	w.ch <- string(p)
 	return len(p), nil
 }
-
-var writeClipboard = clipboard.WriteAll

@@ -318,6 +318,28 @@ func TestUnknownCommandError(t *testing.T) {
 	assertAll(t, out, "unknown command", "/help")
 }
 
+func TestLastResultDisplaysNewestReport(t *testing.T) {
+	d, _, _ := newDeps(t)
+	root := filepath.Dir(d.RepoConfigPath)
+	oldRun := filepath.Join(root, "out", "run-20260905-100000.000000000")
+	newRun := filepath.Join(root, "out", "run-20260905-110000.000000000")
+	if err := os.MkdirAll(oldRun, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(newRun, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldRun, "report.md"), []byte("old report"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newRun, "report.md"), []byte("latest report"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := run(t, d, "/last\nexit\n")
+	assertAll(t, out, "latest report", newRun)
+	assertNone(t, out, "old report")
+}
+
 func TestPipelineCommandsReuseCLIArguments(t *testing.T) {
 	d, _, _ := newDeps(t)
 	var calls [][]string

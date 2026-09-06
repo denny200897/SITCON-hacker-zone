@@ -7,7 +7,11 @@ package tui
 // answers are composed into the exact command line(s) sent to the console pipe.
 
 import (
-	"io"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -81,6 +85,8 @@ func rootMenu(m *model) *menuNode {
 	return &menuNode{items: []menuItem{
 		{label: "Review a repository", labelZH: "檢視儲存庫", desc: "scan → prove → report", descZH: "掃描 → 實證 → 報告", act: reviewWizard},
 		{label: "Scan a repository", labelZH: "掃描儲存庫", desc: "scan only", descZH: "僅執行掃描", act: scanWizard},
+		{label: "Last scan result", labelZH: "上次掃描結果", desc: "show the latest report", descZH: "顯示最近一次報告", act: runCmd("/last", "last")},
+		{label: "Open last report", labelZH: "開啟最近報告", desc: "open report.md", descZH: "開啟 report.md", act: openLastReport},
 		{label: "Providers & API keys", labelZH: "供應商與 API 金鑰", desc: "add, set key, remove", descZH: "新增、設定金鑰、移除", act: func(m *model) tea.Cmd { m.openMenu(providersMenu()); return nil }},
 		{label: "Model routing", labelZH: "模型路由", desc: "which model runs each role", descZH: "設定各角色使用的模型", act: func(m *model) tea.Cmd { m.openMenu(modelsMenu()); return nil }},
 		{label: "Status", labelZH: "狀態", desc: "providers, keys, routing, Docker", descZH: "供應商、金鑰、路由、Docker", act: runCmd("/status", "status")},
@@ -242,6 +248,59 @@ func runCmd(line, echo string) func(m *model) tea.Cmd {
 	return func(m *model) tea.Cmd { return m.run(line, echo) }
 }
 
+func openLastReport(m *model) tea.Cmd {
+	m.menu = nil
+	root, err := os.Getwd()
+	if err != nil {
+		m.appendLine(errorStyle.Render("cannot find repository path: " + err.Error()))
+		return nil
+	}
+	runDir := latestTUIRunDir(root)
+	if runDir == "" {
+		m.appendLine(errorStyle.Render("no previous scan report found; run review first"))
+		return nil
+	}
+	report := filepath.Join(runDir, "report.md")
+	if _, err := os.Stat(report); err != nil {
+		m.appendLine(errorStyle.Render("report.md not found: " + report))
+		return nil
+	}
+	absolute, _ := filepath.Abs(report)
+	m.appendLine(successStyle.Render("Opening report: " + absolute))
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", absolute)
+	case "windows":
+		command = exec.Command("cmd", "/c", "start", "", absolute)
+	default:
+		command = exec.Command("xdg-open", absolute)
+	}
+	if err := command.Start(); err != nil {
+		m.appendLine(errorStyle.Render(fmt.Sprintf("could not open report: %v", err)))
+	}
+	m.resize()
+	return nil
+}
+
+func latestTUIRunDir(root string) string {
+	entries, err := os.ReadDir(filepath.Join(root, "out"))
+	if err != nil {
+		return ""
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "run-") {
+			names = append(names, entry.Name())
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	sort.Strings(names)
+	return filepath.Join(root, "out", names[len(names)-1])
+}
+
 // run echoes the action and writes one command line to the console pipe.
 func (m *model) run(line, echo string) tea.Cmd {
 	return m.runLines(echo, line)
@@ -256,12 +315,10 @@ func (m *model) runLines(echo string, lines ...string) tea.Cmd {
 	if echo != "" {
 		m.appendLine(promptStyle.Render("› ") + userStyle.Render(echo))
 	}
-	go func() {
-		for _, l := range lines {
-			_, _ = io.WriteString(m.pipeW, l+"\n")
-		}
-	}()
-	return nil
+	return tea.Batch(m.startActivity(), func() tea.Msg {
+		m.writeLines(lines...)
+		return nil
+	})
 }
 
 func (m *model) openMenu(child *menuNode) {
@@ -453,6 +510,9 @@ func (m *model) controlBlock() string {
 func (m *model) menuView() string {
 	if m.menu == nil {
 		var b strings.Builder
+		if m.activity {
+			b.WriteString(m.activityView() + "\n")
+		}
 		b.WriteString(m.inputBoxView() + "\n")
 		b.WriteString(m.menuHint())
 		return lipgloss.NewStyle().Width(m.contentWidth()).Render(b.String())
@@ -470,11 +530,18 @@ func (m *model) menuView() string {
 		}
 		b.WriteByte('\n')
 	}
+	if m.activity {
+		b.WriteString(m.activityView() + "\n")
+	}
 	b.WriteString(m.inputBoxView() + "\n")
 	if !m.compactLayout() {
 		b.WriteString(m.menuHint())
 	}
 	return lipgloss.NewStyle().Width(m.contentWidth()).Render(b.String())
+}
+
+func (m *model) activityView() string {
+	return successStyle.Render(spinnerFrames[m.spinnerIndex]) + " " + dimStyle.Render(translations[m.lang].activityRunning)
 }
 
 func (m *model) menuHint() string {

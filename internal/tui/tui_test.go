@@ -13,6 +13,31 @@ import (
 	"github.com/aegis-dev/aegis/internal/settings"
 )
 
+func TestDragAutoScrollPreservesAnchorAndStopsOnRelease(t *testing.T) {
+	m := &model{w: 100, h: 30, lang: languageEnglish, ti: textinput.New()}
+	m.layout()
+	m.appendRaw(strings.Repeat("output line\n", 100))
+	m.vp.SetYOffset(30)
+	m.handleMouseSelection(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, Y: 5})
+	anchor := m.selection.startLine
+	m.selection.endY = 2 + m.vp.Height
+	before := m.vp.YOffset
+	m.scrollSelection()
+	if m.vp.YOffset != before+1 || m.selection.startLine != anchor {
+		t.Fatal("downward drag must scroll while keeping its document anchor")
+	}
+	m.selection.endY = 0
+	m.scrollSelection()
+	if m.vp.YOffset != before || m.selection.startLine != anchor {
+		t.Fatal("upward drag must scroll while keeping its document anchor")
+	}
+	m.selection.final = true
+	m.scrollSelection()
+	if m.vp.YOffset != before {
+		t.Fatal("finished selection must not scroll")
+	}
+}
+
 func TestCompleteFillsUniqueCommandAndSharedPrefix(t *testing.T) {
 	tests := map[string]string{
 		"/he":  "/help ",   // unique match: full command + trailing space
@@ -171,27 +196,5 @@ func TestSaveLanguagePersistsChinesePreference(t *testing.T) {
 	}
 	if cfg.UI.Language != "zh-TW" {
 		t.Fatalf("UI.Language = %q, want zh-TW", cfg.UI.Language)
-	}
-}
-
-func TestCopyTranscriptStripsANSI(t *testing.T) {
-	old := writeClipboard
-	t.Cleanup(func() { writeClipboard = old })
-	var copied string
-	writeClipboard = func(value string) error {
-		copied = value
-		return nil
-	}
-	m := &model{}
-	m.transcript.WriteString("\x1b[31mdoctor result\x1b[0m\n")
-	msg, ok := m.copyTranscript()().(copyResultMsg)
-	if !ok {
-		t.Fatal("copy command returned unexpected message type")
-	}
-	if msg.err != nil {
-		t.Fatal(msg.err)
-	}
-	if copied != "doctor result\n" {
-		t.Fatalf("copied transcript = %q, want plain text", copied)
 	}
 }

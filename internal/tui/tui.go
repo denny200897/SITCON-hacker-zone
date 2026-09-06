@@ -733,8 +733,22 @@ func (m *model) approvalView() string {
 		promptStyle.Render(title),
 		fmt.Sprintf("Pack: %s", req.Pack), fmt.Sprintf("Image: %s", req.Image),
 		fmt.Sprintf("Source: %s", req.BuildDir), fmt.Sprintf("Build network: %s", req.Network),
-		fmt.Sprintf("Run network: %s", req.RunNetwork), "",
+		fmt.Sprintf("Run network: %s", req.RunNetwork),
 	}
+	// Show the agent-authored Dockerfile so the operator isn't approving blind.
+	if req.Recipe != "" {
+		lines = append(lines, "", dimStyle.Render("Dockerfile the agent wants to build:"))
+		recipe := strings.Split(strings.TrimRight(req.Recipe, "\n"), "\n")
+		const maxRecipeLines = 18
+		for i, l := range recipe {
+			if i >= maxRecipeLines {
+				lines = append(lines, dimStyle.Render(fmt.Sprintf("  … (%d more lines)", len(recipe)-maxRecipeLines)))
+				break
+			}
+			lines = append(lines, cmdStyle.Render("  "+ansi.Truncate(l, m.contentWidth()-4, "…")))
+		}
+	}
+	lines = append(lines, "")
 	for i, choice := range choices {
 		prefix := "  "
 		style := dimStyle

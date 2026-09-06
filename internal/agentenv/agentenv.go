@@ -117,10 +117,11 @@ func (r *Runner) Prove(ctx context.Context, runID, contextDir string, spec Spec,
 	defer r.cleanup(image, network, appName, label)
 
 	// 1) Build the agent's image (network allowed, approval is upstream).
-	buildOut, _, err := r.docker(ctx, r.BuildTimeout, []byte(spec.Dockerfile),
+	// docker build writes progress to stderr, so fold both streams into the log.
+	buildOut, buildErr, err := r.docker(ctx, r.BuildTimeout, []byte(spec.Dockerfile),
 		"build", "--network", r.buildNet(), "--memory", r.Memory,
 		"--label", label, "-t", image, "-f", "-", contextDir)
-	buildTail := tail(buildOut, 2000)
+	buildTail := tail(append(append([]byte{}, buildOut...), buildErr...), 2000)
 	if err != nil {
 		return Result{BuildLogTail: buildTail, Reason: "image build failed"}, nil
 	}
@@ -277,18 +278,22 @@ func (r *Runner) docker(ctx context.Context, timeout time.Duration, stdin []byte
 	return outBuf.Bytes(), errBuf.Bytes(), err
 }
 
-// sanitize keeps a run id safe for docker object names.
+// sanitize keeps a run id safe for docker object names, which must be
+// lowercase (image tags reject uppercase, e.g. finding ids like F-0001).
 func sanitize(s string) string {
 	var b strings.Builder
-	for _, r := range s {
+	for _, r := range strings.ToLower(s) {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
 			b.WriteRune(r)
 		default:
 			b.WriteRune('-')
 		}
 	}
-	out := b.String()
+	out := strings.Trim(b.String(), "-._")
+	if out == "" {
+		out = "run"
+	}
 	if len(out) > 48 {
 		out = out[:48]
 	}

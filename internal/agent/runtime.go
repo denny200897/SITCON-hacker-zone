@@ -130,6 +130,11 @@ func NewToolDefs(role llm.Role, toolsSchema []byte, witnessSpecSchema []byte, de
 
 	var out []llm.ToolDef
 	for _, name := range Whitelist[role] {
+		if name == "submit_environment_spec" {
+			// The agent-built-environment prover uses its own tool set
+			// (NewEnvToolDefs); the WitnessSpec prover must not be offered it.
+			continue
+		}
 		desc := descriptions[name]
 		switch {
 		case name == "submit_witness_spec":
@@ -150,6 +155,45 @@ func NewToolDefs(role llm.Role, toolsSchema []byte, witnessSpecSchema []byte, de
 			}
 			out = append(out, llm.ToolDef{Name: name, Description: desc, InputSchema: raw})
 		}
+	}
+	return out, nil
+}
+
+// NewEnvToolDefs builds the tool set for the agent-built-environment prover:
+// the read-only observers plus submit_environment_spec, whose input schema is
+// environment_spec.schema.json (envSpecSchema). It is separate from
+// NewToolDefs so the WitnessSpec prover's tools are unchanged.
+func NewEnvToolDefs(toolsSchema []byte, envSpecSchema []byte, descriptions map[string]string) ([]llm.ToolDef, error) {
+	var defs struct {
+		Definitions map[string]any `json:"definitions"`
+	}
+	if err := unmarshalStrictJSON(toolsSchema, &defs); err != nil {
+		return nil, fmt.Errorf("agent: 解析 tools schema: %w", err)
+	}
+	var envSpec any
+	if err := unmarshalStrictJSON(envSpecSchema, &envSpec); err != nil {
+		return nil, fmt.Errorf("agent: 解析 environment_spec schema: %w", err)
+	}
+	var out []llm.ToolDef
+	for _, name := range []string{"read_code", "search_code", "submit_environment_spec"} {
+		desc := descriptions[name]
+		if name == "submit_environment_spec" {
+			raw, err := jsonMarshal(envSpec)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, llm.ToolDef{Name: name, Description: desc, InputSchema: raw})
+			continue
+		}
+		schema, ok := defs.Definitions[name]
+		if !ok {
+			return nil, fmt.Errorf("agent: tools schema 缺 definition %q", name)
+		}
+		raw, err := jsonMarshal(schema)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, llm.ToolDef{Name: name, Description: desc, InputSchema: raw})
 	}
 	return out, nil
 }

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/aegis-dev/aegis/internal/llm"
@@ -81,7 +82,7 @@ type Result struct {
 // assistantText 為本輪 assistant 文字（submit 的三行 preamble 驗證用）。
 func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, input json.RawMessage, assistantText string) Result {
 	if t.audit == nil {
-		return Result{Content: "policy_denied: audit log unavailable（fail-closed）", IsError: true}
+		return Result{Content: "policy_denied: audit log unavailable (fail-closed)", IsError: true}
 	}
 	auditInput := input
 	if redaction.HasSecret(string(input)) {
@@ -93,31 +94,31 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "not_in_whitelist"); err != nil {
 			return auditFailure(err)
 		}
-		return Result{Content: "policy_denied: 工具不在角色白名單（§18.1）", IsError: true}
+		return Result{Content: "policy_denied: tool not in this role's allowlist (§18.1)", IsError: true}
 	}
 	if tool == "submit_witness_spec" && t.OnSubmit == nil {
 		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "no_submit_handler"); err != nil {
 			return auditFailure(err)
 		}
-		return Result{Content: "policy_denied: 本 session 未開放提交", IsError: true}
+		return Result{Content: "policy_denied: witness submission is not enabled in this session", IsError: true}
 	}
 	if tool == "submit_witness_spec" && t.acceptedSpec {
 		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "spec_already_accepted"); err != nil {
 			return auditFailure(err)
 		}
-		return Result{Content: "policy_denied: 本 session 已接受 WitnessSpec", IsError: true}
+		return Result{Content: "policy_denied: a WitnessSpec was already accepted in this session", IsError: true}
 	}
 	if tool == "submit_environment_spec" && t.OnSubmitEnv == nil {
 		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "no_env_submit_handler"); err != nil {
 			return auditFailure(err)
 		}
-		return Result{Content: "policy_denied: 本 session 未開放環境提交", IsError: true}
+		return Result{Content: "policy_denied: environment submission is not enabled in this session", IsError: true}
 	}
 	if tool == "submit_environment_spec" && t.acceptedSpec {
 		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "spec_already_accepted"); err != nil {
 			return auditFailure(err)
 		}
-		return Result{Content: "policy_denied: 本 session 已接受一份 spec", IsError: true}
+		return Result{Content: "policy_denied: a spec was already accepted in this session", IsError: true}
 	}
 	// The allow decision must be durable before any tool side effect or source
 	// disclosure occurs.
@@ -141,7 +142,7 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 	case "submit_environment_spec":
 		res = t.submitEnv(ctx, input, assistantText)
 	default:
-		res = Result{Content: "policy_denied: 未知工具", IsError: true}
+		res = Result{Content: "policy_denied: unknown tool", IsError: true}
 	}
 
 	decision := AuditAllowed
@@ -170,26 +171,26 @@ func auditFailure(err error) Result {
 // snapshot 根開頭（§18.1 路徑政策；symlink 逃逸在此擋下）。
 func pathInSnapshot(snapshotDir, rel string) (string, error) {
 	if rel == "" {
-		return "", fmt.Errorf("path 為空")
+		return "", fmt.Errorf("path is empty")
 	}
 	if filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path 必須是 snapshot 相對路徑")
+		return "", fmt.Errorf("path must be a snapshot-relative path")
 	}
 	clean := filepath.Clean(rel)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path 越出 snapshot 根（§18.1 路徑政策）")
+		return "", fmt.Errorf("path escapes the snapshot root (§18.1 path policy)")
 	}
 	abs := filepath.Join(snapshotDir, clean)
 	realAbs, err := filepath.Abs(abs)
 	if err != nil {
-		return "", fmt.Errorf("path 解析失敗（%s）", rel)
+		return "", fmt.Errorf("path could not be resolved (%s)", rel)
 	}
 	rootAbs, err := filepath.Abs(snapshotDir)
 	if err != nil {
-		return "", fmt.Errorf("snapshot 根解失敗：%w", err)
+		return "", fmt.Errorf("snapshot root could not be resolved: %w", err)
 	}
 	if realAbs != rootAbs && !strings.HasPrefix(realAbs, rootAbs+string(filepath.Separator)) {
-		return "", fmt.Errorf("path 越出 snapshot 根（§18.1 路徑政策）")
+		return "", fmt.Errorf("path escapes the snapshot root (§18.1 path policy)")
 	}
 	// Reject every symlink component instead of resolving it. This is stricter
 	// than merely checking the final target and is portable to Windows hosts.
@@ -198,10 +199,10 @@ func pathInSnapshot(snapshotDir, rel string) (string, error) {
 		current = filepath.Join(current, component)
 		info, statErr := os.Lstat(current)
 		if statErr != nil {
-			return "", fmt.Errorf("path 不可讀（%s）", rel)
+			return "", fmt.Errorf("path is not readable (%s)", rel)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			return "", fmt.Errorf("path 含 symlink（§18.1 路徑政策）")
+			return "", fmt.Errorf("path contains a symlink (§18.1 path policy)")
 		}
 	}
 	return realAbs, nil
@@ -215,7 +216,7 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 		End   int64  `json:"end"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return Result{Content: "policy_denied: read_code 參數非法：" + err.Error(), IsError: true}
+		return Result{Content: "policy_denied: invalid read_code arguments: " + err.Error(), IsError: true}
 	}
 	abs, err := pathInSnapshot(t.SnapshotDir, args.Path)
 	if err != nil {
@@ -223,7 +224,7 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
-		return Result{Content: "read_code 失敗：" + err.Error(), IsError: true}
+		return Result{Content: "read_code failed: " + err.Error(), IsError: true}
 	}
 	lines := bytes.Split(data, []byte("\n"))
 	start, end := args.Start, args.End
@@ -234,14 +235,14 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 		end = int64(len(lines))
 	}
 	if start > end {
-		return Result{Content: "read_code 失敗：start > end", IsError: true}
+		return Result{Content: "read_code failed: start > end", IsError: true}
 	}
 	var buf bytes.Buffer
 	total := 0
 	for i := start; i <= end; i++ {
 		line := append([]byte(fmt.Sprintf("%d: ", i)), lines[i-1]...)
 		if total+len(line) > MaxReadBytes {
-			fmt.Fprintf(&buf, "…（輸出達 %d 位元組上限，截斷；請縮小 range）\n", MaxReadBytes)
+			fmt.Fprintf(&buf, "…(output hit the %d-byte cap and was truncated; narrow the range)\n", MaxReadBytes)
 			break
 		}
 		buf.Write(line)
@@ -250,7 +251,7 @@ func (t *ToolRegistry) readCode(input json.RawMessage) Result {
 	}
 	masked, patterns := redaction.Mask(buf.String())
 	if redaction.HasSecret(masked) {
-		return Result{Content: "policy_denied: read_code 遮蔽後仍命中 secret pattern（fail-closed）", IsError: true}
+		return Result{Content: "policy_denied: read_code output still matched a secret pattern after masking (fail-closed)", IsError: true}
 	}
 	if len(patterns) > 0 {
 		masked = fmt.Sprintf("[secret-like spans redacted: %s]\n%s", strings.Join(patterns, ","), masked)
@@ -265,14 +266,14 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 		Query string `json:"query"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return Result{Content: "policy_denied: search_code 參數非法：" + err.Error(), IsError: true}
+		return Result{Content: "policy_denied: invalid search_code arguments: " + err.Error(), IsError: true}
 	}
 	if len(args.Query) > 256 {
-		return Result{Content: "policy_denied: query 逾 256 字元（§18.1）", IsError: true}
+		return Result{Content: "policy_denied: query exceeds 256 characters (§18.1)", IsError: true}
 	}
 	re, err := regexp.Compile(args.Query)
 	if err != nil {
-		return Result{Content: "policy_denied: regexp 無法編譯（RE2 不支援 lookahead／backreference）：" + err.Error(), IsError: true}
+		return Result{Content: "policy_denied: regexp did not compile (RE2 has no lookahead/backreference): " + err.Error(), IsError: true}
 	}
 	type hit struct {
 		Path string `json:"path"`
@@ -317,11 +318,11 @@ func (t *ToolRegistry) searchCode(input json.RawMessage) Result {
 	})
 	if walkErr != nil && walkErr != filepath.SkipAll {
 		// filepath.SkipAll 是正常截斷；其他錯誤屬環境問題。
-		return Result{Content: "search_code 失敗：" + walkErr.Error(), IsError: true}
+		return Result{Content: "search_code failed: " + walkErr.Error(), IsError: true}
 	}
 	out, merr := json.Marshal(hits)
 	if merr != nil {
-		return Result{Content: "search_code 序列化失敗：" + merr.Error(), IsError: true}
+		return Result{Content: "search_code serialization failed: " + merr.Error(), IsError: true}
 	}
 	if len(hits) == 0 {
 		return Result{Content: "[]", IsError: false}
@@ -336,11 +337,18 @@ func (t *ToolRegistry) semgrep(ctx context.Context, input json.RawMessage) Resul
 		Rule string `json:"rule"`
 	}
 	if err := json.Unmarshal(input, &args); err != nil {
-		return Result{Content: "policy_denied: semgrep 參數非法：" + err.Error(), IsError: true}
+		return Result{Content: "policy_denied: invalid semgrep arguments: " + err.Error(), IsError: true}
 	}
 	rulePath, ok := t.Rules[args.Rule]
 	if !ok || args.Rule == "" {
-		return Result{Content: "policy_denied: 規則 id 未登錄於 pack manifest（§18.1）", IsError: true}
+		registered := registeredRuleList(t.Rules)
+		msg := "policy_denied: semgrep rule id is not registered in the pack manifest (§18.1). "
+		if registered == "" {
+			msg += "This pack registers no semgrep rules; use read_code/search_code instead."
+		} else {
+			msg += "Registered rule ids are exactly: [" + registered + "]. Use one of these verbatim, or rely on read_code/search_code — do not guess other ids."
+		}
+		return Result{Content: msg, IsError: true}
 	}
 	bin := t.SemgrepBin
 	if bin == "" {
@@ -349,11 +357,11 @@ func (t *ToolRegistry) semgrep(ctx context.Context, input json.RawMessage) Resul
 	// semgrep 以 os/exec 呼叫（§16），snapshot 唯讀掃描，--json 機器可讀輸出。
 	out, err := exec.CommandContext(ctx, bin, "--json", "--config", rulePath, t.SnapshotDir).Output()
 	if err != nil {
-		return Result{Content: "semgrep 失敗（未安裝或規則錯誤？）：" + err.Error(), IsError: true}
+		return Result{Content: "semgrep failed (not installed or bad rule?): " + err.Error(), IsError: true}
 	}
 	hits, err := parseSemgrepJSON(out, args.Rule)
 	if err != nil {
-		return Result{Content: "semgrep 輸出解析失敗：" + err.Error(), IsError: true}
+		return Result{Content: "semgrep output parse failed: " + err.Error(), IsError: true}
 	}
 	if len(hits) > MaxSemgrepHits {
 		hits = hits[:MaxSemgrepHits]
@@ -361,16 +369,16 @@ func (t *ToolRegistry) semgrep(ctx context.Context, input json.RawMessage) Resul
 	for i := range hits {
 		hits[i].MatchedText, _ = redaction.Mask(hits[i].MatchedText)
 		if redaction.HasSecret(hits[i].MatchedText) {
-			return Result{Content: "policy_denied: semgrep 遮蔽後仍命中 secret pattern（fail-closed）", IsError: true}
+			return Result{Content: "policy_denied: semgrep output still matched a secret pattern after masking (fail-closed)", IsError: true}
 		}
 	}
 	b, mErr := json.Marshal(hits)
 	if mErr != nil {
-		return Result{Content: "semgrep 序列化失敗：" + mErr.Error(), IsError: true}
+		return Result{Content: "semgrep serialization failed: " + mErr.Error(), IsError: true}
 	}
 	masked, _ := redaction.Mask(string(b))
 	if redaction.HasSecret(masked) {
-		return Result{Content: "policy_denied: semgrep 遮蔽後仍命中 secret pattern（fail-closed）", IsError: true}
+		return Result{Content: "policy_denied: semgrep output still matched a secret pattern after masking (fail-closed)", IsError: true}
 	}
 	return Result{Content: masked}
 }
@@ -410,7 +418,7 @@ func parseSemgrepJSON(data []byte, ruleID string) ([]semgrepHit, error) {
 func (t *ToolRegistry) submit(ctx context.Context, _ llm.Role, input json.RawMessage, assistantText string) Result {
 	var spec map[string]any
 	if err := json.Unmarshal(input, &spec); err != nil {
-		return Result{Content: "policy_denied: WitnessSpec 非 JSON object：" + err.Error(), IsError: true}
+		return Result{Content: "policy_denied: WitnessSpec is not a JSON object: " + err.Error(), IsError: true}
 	}
 	accepted, feedback := t.OnSubmit(ctx, spec, assistantText)
 	if !accepted {
@@ -430,7 +438,7 @@ func (t *ToolRegistry) submit(ctx context.Context, _ llm.Role, input json.RawMes
 func (t *ToolRegistry) submitEnv(ctx context.Context, input json.RawMessage, assistantText string) Result {
 	var spec map[string]any
 	if err := json.Unmarshal(input, &spec); err != nil {
-		return Result{Content: "policy_denied: EnvironmentSpec 非 JSON object：" + err.Error(), IsError: true}
+		return Result{Content: "policy_denied: EnvironmentSpec is not a JSON object: " + err.Error(), IsError: true}
 	}
 	accepted, feedback := t.OnSubmitEnv(ctx, spec, assistantText)
 	if !accepted {
@@ -440,4 +448,15 @@ func (t *ToolRegistry) submitEnv(ctx context.Context, input json.RawMessage, ass
 		t.acceptedSpec = true
 	}
 	return Result{Content: feedback}
+}
+
+// registeredRuleList returns the pack-registered semgrep rule ids, sorted, as a
+// comma-separated string for error messages so the model uses real ids.
+func registeredRuleList(rules map[string]string) string {
+	ids := make([]string, 0, len(rules))
+	for id := range rules {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
 }

@@ -67,13 +67,15 @@ Aegis 適合開發中的安全檢查、修補前的問題調查，以及 CI 中�
 curl -fsSL https://raw.githubusercontent.com/denny200897/SITCON-hacker-zone/main/scripts/install.sh | sh
 ```
 
-安裝器依 OS／CPU 從 GitHub Releases 下載執行檔，優先安裝至可寫入的 `/usr/local/bin`，否則使用 `~/.local/bin`。若安裝目錄不在 `PATH`，依提示加入，例如：
+安裝器依 OS／CPU 從 GitHub Releases 下載執行檔，優先安裝至可寫入的 `/usr/local/bin`，否則使用 `~/.local/bin`。安裝目錄已在 `PATH` 時，可直接在任意目錄執行 `aegis`，不需要切回 Aegis 原始碼目錄。
+
+Shell 安裝器不會自動修改 shell 設定檔；若安裝目錄不在 `PATH`，會顯示加入提示。例如安裝至 `~/.local/bin` 時，在目前終端執行：
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-可將這行加入 shell 設定檔，讓後續終端也能找到 `aegis`。
+若要讓後續終端也能找到 `aegis`，將這行加入 shell 設定檔（例如 zsh 的 `~/.zshrc` 或 Bash 的 `~/.bashrc`；登入 shell 請使用對應的登入設定檔）。自訂 `AEGIS_INSTALL_DIR` 時，請改成實際安裝目錄。
 
 ### Windows（PowerShell）
 
@@ -82,6 +84,16 @@ irm https://raw.githubusercontent.com/denny200897/SITCON-hacker-zone/main/script
 ```
 
 預設安裝至 `%LOCALAPPDATA%\Aegis\bin`，並加入使用者的 `PATH`。必要時重新開啟終端。
+
+### 確認全域指令可用
+
+安裝並完成 `PATH` 設定後，在任意目錄執行：
+
+```sh
+aegis --help
+```
+
+後續使用方式皆以全域 `aegis` 指令為例；審查目前目錄可執行 `aegis review --target . --watch`，也可用 `--target` 指向其他本機儲存庫。
 
 ### 手動安裝與指定版本
 
@@ -341,4 +353,4 @@ go vet ./...
 
 ## 授權
 
-目前儲存庫尚未提供 `LICENSE`，因此尚未明確授予開源授權。授權條款仍待維護者確定並補上。
+本專案採用 [MIT License](LICENSE)。

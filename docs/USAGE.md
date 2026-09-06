@@ -2,20 +2,59 @@
 
 ## 前置需求
 
-- Go 1.24（從原始碼建置時）
-- Docker daemon
+- Go 1.24.2 以上（僅從原始碼建置時需要；發布流程使用 Go 1.26）
+- Docker daemon（沙箱環境準備與漏洞實證時需要）
 - `semgrep` 命令（建議；已設定 reviewer 時可在缺少／失敗時降級為純 LLM 全局審查）
 - 至少一個 Anthropic 或 OpenAI-compatible provider 與 API key（自動 prove 時）
 
-在專案根目錄建置：
+## 安裝與全域指令
+
+macOS／Linux：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/denny200897/SITCON-hacker-zone/main/scripts/install.sh | sh
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/denny200897/SITCON-hacker-zone/main/scripts/install.ps1 | iex
+```
+
+Windows 安裝器會將安裝目錄加入使用者的 `PATH`，必要時重新開啟終端。
+macOS／Linux 優先安裝至可寫入的 `/usr/local/bin`，否則使用 `~/.local/bin`；
+安裝器不會自動修改 shell 設定檔。若提示安裝目錄不在 `PATH`，請依提示設定。
+例如安裝至 `~/.local/bin` 時：
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+這行會讓目前終端立即生效；若要永久生效，請同時加入對應的 shell 設定檔，
+例如 `~/.zshrc` 或 `~/.bashrc`（登入 shell 請使用對應的登入設定檔）。
+使用自訂 `AEGIS_INSTALL_DIR` 時，請改成實際安裝目錄。
+
+確認指令可用：
+
+```sh
+aegis --help
+```
+
+後續範例皆使用全域 `aegis` 指令，可在任意目錄執行，不需要進入 Aegis 原始碼目錄。
+指定版本、自訂安裝目錄與手動安裝方式見 [README 安裝方式](../README.md#安裝方式)。
+
+若選擇從原始碼建置，在 Aegis 專案根目錄執行：
 
 ```sh
 go build -o ./bin/aegis ./cmd/aegis
 ```
 
+此建置命令不會自動加入 `PATH`；請將執行檔放入 `PATH` 中的目錄，或將下方範例的
+`aegis` 替換成建置產物的絕對路徑。Windows 建置請使用 `-o ./bin/aegis.exe`。
+
 ## 首次設定
 
-執行 `./bin/aegis`（或 `./bin/aegis console`）進入互動 console，再依序輸入：
+在想審查的儲存庫執行 `aegis`（或 `aegis console`）進入互動 console，再依序輸入：
 
 ```text
 /provider add anthropic
@@ -60,7 +99,7 @@ max_sandbox_minutes_per_finding = 10
 bundled `python-web` pack 與 schemas 已內嵌進 binary，可從任意工作目錄執行：
 
 ```sh
-./bin/aegis review --target /path/to/repo --watch
+aegis review --target /path/to/repo --watch
 ```
 
 `review` 是一般使用者入口：自動建立單一 run，依序完成 scan、對所有 finding
@@ -93,7 +132,7 @@ C#、Rust、Scala、Vue、Svelte，以及常見 markup、設定檔、shell 與 D
 `analysis_summary`、candidate 數量、prover 工具活動與明確完成／失敗狀態：
 
 ```sh
-./bin/aegis review --target /path/to/repo --watch
+aegis review --target /path/to/repo --watch
 ```
 
 終端不會傾印 source bundle、完整 prompt、完整 JSON 或 `read_code` 結果；這些完整
@@ -126,10 +165,10 @@ oracle 加入前，它會清楚維持未機械實證狀態。
 `scan`、`prove`、`replay`、`report` 仍保留作為 CI、除錯與斷點續跑的進階介面：
 
 ```sh
-./bin/aegis scan --target /path/to/repo
-./bin/aegis prove --target /path/to/repo --watch
-./bin/aegis replay --target /path/to/repo
-./bin/aegis report --target /path/to/repo
+aegis scan --target /path/to/repo
+aegis prove --target /path/to/repo --watch
+aegis replay --target /path/to/repo
+aegis report --target /path/to/repo
 ```
 
 - `scan` 建立 immutable snapshot，執行確定性 detector；若已設定 reviewer，會再依序呼叫 recon、reviewer 與 triager 完成模型審查，最後產生 `inventory.json`、`candidates.json`、`triage.json` 與 `findings.json`。未設定 reviewer 時保留零 LLM 的確定性掃描模式。
@@ -142,7 +181,7 @@ oracle 加入前，它會清楚維持未機械實證狀態。
 人工 WitnessSpec 仍可用於離線除錯，但此模式不呼叫 LLM，且必須指定單一 finding：
 
 ```sh
-./bin/aegis prove F-0001 --target /path/to/repo --spec witness.json
+aegis prove F-0001 --target /path/to/repo --spec witness.json
 ```
 
 所有 run 產物預設位於目標 repo 的 `out/run-<timestamp>/`；工具呼叫記在 `audit.jsonl`，狀態轉移記在 `journal.sqlite`。

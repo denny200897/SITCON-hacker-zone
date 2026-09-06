@@ -385,6 +385,55 @@ func TestSemgrepRuleIDsAreStableAndSorted(t *testing.T) {
 	}
 }
 
+func TestReviewFileBatchesUseLargerScanBatches(t *testing.T) {
+	dir := t.TempDir()
+	files := make([]inventory.File, 0, reviewerBatchFileLimit+1)
+	for i := 0; i < reviewerBatchFileLimit+1; i++ {
+		name := fmt.Sprintf("file_%02d.py", i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("print('ok')\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, inventory.File{Path: name, Language: "python"})
+	}
+	inv := &inventory.Inventory{Files: files}
+	got := reviewFileBatches(dir, inv)
+	if len(got) != 2 || len(got[0]) != reviewerBatchFileLimit || len(got[1]) != 1 {
+		t.Fatalf("batches = %#v", got)
+	}
+}
+
+func TestRunDetectorsKeepsManifestOrder(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "semgrep-fake")
+	script := `#!/bin/sh
+case "$3" in
+  *slow*) sleep 0.2; line=1 ;;
+  *) line=2 ;;
+esac
+printf '{"results":[{"path":"app.py","start":{"line":%s},"extra":{"message":"hit","match":"x","metadata":{"aegis_family":"sqli","aegis_sink_type":"sql.concat"}}}]}' "$line"
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	detectors := []packs.DetectorEntry{
+		{ID: "slow", Path: "slow.yml"},
+		{ID: "fast", Path: "fast.yml"},
+	}
+	got := runDetectors(context.Background(), dir, dir, detectors, bin)
+	if len(got) != 2 {
+		t.Fatalf("results = %+v", got)
+	}
+	if got[0].id != "slow" || got[1].id != "fast" {
+		t.Fatalf("detector order changed: %+v", got)
+	}
+	if got[0].err != nil || got[1].err != nil {
+		t.Fatalf("detectors failed: %+v", got)
+	}
+	if got[0].candidates[0].Sink.Line != 1 || got[1].candidates[0].Sink.Line != 2 {
+		t.Fatalf("unexpected candidates: %+v", got)
+	}
+}
+
 func TestAITracePersistsAndWatchesVisibleEvents(t *testing.T) {
 	dir := t.TempDir()
 	var terminal bytes.Buffer

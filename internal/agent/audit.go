@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/aegis-dev/aegis/internal/llm"
@@ -65,7 +66,8 @@ type AuditEntry struct {
 
 // AuditLog 是 append-only 的 audit.jsonl。
 type AuditLog struct {
-	f *os.File
+	mu sync.Mutex
+	f  *os.File
 }
 
 // OpenAuditLog 開啟（或建立）<runDir>/audit.jsonl 以附加寫入。
@@ -83,6 +85,10 @@ func (a *AuditLog) Append(role llm.Role, tool string, args json.RawMessage, d Au
 	if a == nil || a.f == nil {
 		return fmt.Errorf("agent: audit log unavailable")
 	}
+	// Serialize writes so concurrent reviewer batches / provers cannot interleave
+	// entries or race the shared file handle.
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if args == nil {
 		args = json.RawMessage("null")
 	}

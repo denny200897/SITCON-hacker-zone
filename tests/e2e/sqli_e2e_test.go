@@ -6,11 +6,13 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +31,11 @@ const (
 	packImageName  = "aegis-python-web"
 	packImageTag   = "aegis-python-web:3.12"
 	fixtureDirName = "fixtures/vuln-sqli-001"
+)
+
+var (
+	packImageOnce sync.Once
+	packImageErr  string
 )
 
 // env 必備前提：pack（含 digest 記載的映像）、alpine helper、docker daemon。
@@ -54,14 +61,9 @@ func setupE2E(t *testing.T) (*orchestrator.Prover, string) {
 	// 本地構建映像以 repo digest 定址；重建（即使全快取）會產生新 manifest digest
 	//（config 時間戳），故只在 tag 整個不存在時才構建，digest 不符時以 /doctor 語意要求重錄。
 	imageRef := pack.Manifest.Templates[0].Image
-	if !imageExists(imageRef) {
-		if tagExists() {
-			t.Skipf("本地 tag 的 repo digest 與 manifest %q 不符（需以 /doctor 重錄）", imageRef)
-		}
-		buildPackImage(t, repoRoot)
-		if !imageExists(imageRef) {
-			t.Skipf("pack 映像構建後仍缺 manifest digest %q（需重錄）", imageRef)
-		}
+	requirePackImage(t, repoRoot, imageRef)
+	if packImageErr != "" {
+		t.Skip(packImageErr)
 	}
 
 	helper, ok := pack.Manifest.Images["helper/alpine"]
@@ -130,6 +132,23 @@ func setupE2E(t *testing.T) (*orchestrator.Prover, string) {
 		Budget:         budget.Budget{MaxEnv: 1, MaxHarness: 1, MaxHypotheses: 1, MaxSandboxMinutes: 10},
 		PrevSpecHashes: map[string]bool{},
 	}, findingID
+}
+
+func requirePackImage(t *testing.T, repoRoot, imageRef string) {
+	t.Helper()
+	packImageOnce.Do(func() {
+		if imageExists(imageRef) {
+			return
+		}
+		if tagExists() {
+			packImageErr = fmt.Sprintf("本地 tag 的 repo digest 與 manifest %q 不符（需以 /doctor 重錄）", imageRef)
+			return
+		}
+		buildPackImage(t, repoRoot)
+		if !imageExists(imageRef) {
+			packImageErr = fmt.Sprintf("pack 映像構建後仍缺 manifest digest %q（需重錄）", imageRef)
+		}
+	})
 }
 
 // sqliWitnessSpec：手寫 WitnessSpec（M0b 決定性；M0c 起由 agent 迴圈產生）。

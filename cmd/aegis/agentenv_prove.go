@@ -10,6 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/aegis-dev/aegis/internal/agent"
 	"github.com/aegis-dev/aegis/internal/agentenv"
@@ -113,33 +116,61 @@ func runAgentEnvProve(ctx context.Context, out io.Writer, runDir, scanRoot strin
 	defer audit.Close()
 
 	fmt.Fprintf(out, "\n→ agent-built environment: attempting %d finding(s) that lack a pinned oracle\n", len(pending))
-	proven := 0
-	for _, idx := range pending {
-		finding := findings[idx]
-		findingID := stringValue(finding["id"])
-		snapshotID := stringValue(finding["snapshot_id"])
-		snapshotDir := filepath.Join(cacheDir, "snapshots", snapshotID)
-		if stat, statErr := os.Stat(snapshotDir); statErr != nil || !stat.IsDir() {
-			fmt.Fprintf(out, "  ○ %s — snapshot missing, skipped\n", findingID)
-			continue
-		}
-		sink := mapValue(finding["sink"])
-		contextText, _ := sinkContext(snapshotDir, stringValue(sink["file"]), intValue(sink["line"]), 200)
 
-		result, reason := proveOneWithAgentEnv(ctx, out, runner, adapter, model, registry, toolDefs, audit,
-			runDir, snapshotDir, findingID, finding, contextText, watch)
-		if result != nil && result.Proven {
-			finding["verification"] = "PROVEN"
-			finding["proof_note"] = "proven by agent-built environment (" + result.OracleKind + " oracle)"
-			if len(result.EvidenceRefs) > 0 {
-				setEvidenceID(finding, result.EvidenceRefs[0])
-			}
-			proven++
-			fmt.Fprintf(out, "  ✓ %s — PROVEN (agent-built env, %s)\n", findingID, result.OracleKind)
-		} else {
-			fmt.Fprintf(out, "  ○ %s — not proven (%s)\n", findingID, reason)
+	// Serialize operator approvals (one prompt at a time, and it fixes the
+	// approver's shared allow-all state) while letting the heavy build/run/exploit
+	// work proceed in parallel across findings.
+	base := approval.FromContext(ctx)
+	var approvalMu sync.Mutex
+	ctx = approval.WithApprover(ctx, func(req approval.BuildRequest) (approval.Decision, error) {
+		approvalMu.Lock()
+		defer approvalMu.Unlock()
+		if base == nil {
+			return approval.Deny, nil
 		}
+		return base(req)
+	})
+
+	var mu sync.Mutex
+	proven := 0
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(dockerConcurrencyLimit(2))
+	for _, idx := range pending {
+		idx := idx
+		group.Go(func() error {
+			finding := findings[idx]
+			findingID := stringValue(finding["id"])
+			snapshotID := stringValue(finding["snapshot_id"])
+			snapshotDir := filepath.Join(cacheDir, "snapshots", snapshotID)
+			if stat, statErr := os.Stat(snapshotDir); statErr != nil || !stat.IsDir() {
+				mu.Lock()
+				fmt.Fprintf(out, "  ○ %s — snapshot missing, skipped\n", findingID)
+				mu.Unlock()
+				return nil
+			}
+			sink := mapValue(finding["sink"])
+			contextText, _ := sinkContext(snapshotDir, stringValue(sink["file"]), intValue(sink["line"]), 200)
+
+			result, reason := proveOneWithAgentEnv(groupCtx, out, runner, adapter, model, registry, toolDefs, audit,
+				runDir, snapshotDir, findingID, finding, contextText, watch)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if result != nil && result.Proven {
+				finding["verification"] = "PROVEN"
+				finding["proof_note"] = "proven by agent-built environment (" + result.OracleKind + " oracle)"
+				if len(result.EvidenceRefs) > 0 {
+					setEvidenceID(finding, result.EvidenceRefs[0])
+				}
+				proven++
+				fmt.Fprintf(out, "  ✓ %s — PROVEN (agent-built env, %s)\n", findingID, result.OracleKind)
+			} else {
+				fmt.Fprintf(out, "  ○ %s — not proven (%s)\n", findingID, reason)
+			}
+			return nil
+		})
 	}
+	_ = group.Wait()
 	return proven, nil
 }
 

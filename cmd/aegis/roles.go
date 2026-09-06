@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/aegis-dev/aegis/internal/agent"
 	"github.com/aegis-dev/aegis/internal/candidates"
 	"github.com/aegis-dev/aegis/internal/credentials"
@@ -70,6 +72,8 @@ type reviewCandidate struct {
 	Rationale          string          `json:"rationale"`
 	PriorityHint       string          `json:"priority_hint"`
 }
+
+const reviewerBatchFileLimit = 24
 
 func decodeReviewCandidates(text string) ([]reviewCandidate, error) {
 	var lastErr error
@@ -265,7 +269,7 @@ func reviewFileBatches(snapshotDir string, inv *inventory.Inventory) [][]string 
 			continue
 		}
 		current = append(current, file.Path)
-		if len(current) == 12 {
+		if len(current) == reviewerBatchFileLimit {
 			batches = append(batches, current)
 			current = nil
 		}
@@ -443,22 +447,40 @@ func runLLMScan(ctx context.Context, repoRoot, snapshotDir, runDir, packDir stri
 	defer audit.Close()
 	emitAITrace(withAIPhase(ctx, "review-plan"), string(llm.RoleReviewer), "workflow",
 		fmt.Sprintf("Review plan ready: %d repository files, %d exploration batch(es); tools enabled", len(inv.Files), len(batches)))
+	// Batches are independent read-only investigations, so run them in parallel
+	// (bounded). Each gets its own ToolRegistry (own observer) but shares the
+	// thread-safe audit log; results are collected per index and merged in order.
+	batchResults := make([][]reviewCandidate, len(batches))
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(concurrencyLimit(4))
 	for i, files := range batches {
-		batchPhase := fmt.Sprintf("review-batch-%d", i+1)
-		emitAITrace(withAIPhase(ctx, batchPhase), string(llm.RoleReviewer), "workflow",
-			fmt.Sprintf("Exploring batch %d/%d: %s", i+1, len(batches), strings.Join(files, ", ")))
-		prompt := fmt.Sprintf("Repository reconnaissance summary:\n%s\n\nInvestigate batch %d/%d. The assigned files are:\n- %s\n\nUse read_code to inspect the assigned files and search_code to follow inputs, callers, routes, authorization checks, state changes, and sinks across the repository. Use registered Semgrep rules only when useful. Examine external input, trust boundaries, authentication/authorization, races, serialization, file/network/process sinks, and business logic; do not limit yourself to literal patterns. Before tool calls, emit a concise public progress note describing the next check and why. After investigation, return only one JSON object with analysis_summary (a public evidence-based summary, not hidden chain-of-thought) and candidates (array). Candidate fields: file, line, symbol, type, suspected_vuln_class, cwe, impact, evidence, chain, rationale, priority_hint. Suggested general types: [%s]. Exact proof-pack types when applicable: %v. Every candidate needs a real file:line and a complete input-to-impact chain; omit best-practice-only concerns. Return candidates: [] when none are supported.", reconSummary, i+1, len(batches), strings.Join(files, "\n- "), taxonomy, sinkTypes)
-		text, toolCalls, callErr := reviewerAgentSession(withAIPhase(ctx, batchPhase), reviewer, reviewerModel, registry, toolDefs, prompt)
-		if callErr != nil {
-			return nil, fmt.Errorf("reviewer batch %d failed: %w", i+1, callErr)
-		}
-		batch, err := decodeReviewCandidates(text)
-		if err != nil {
-			return nil, fmt.Errorf("reviewer batch %d response is not normalizable structured JSON: %w", i+1, err)
-		}
+		i, files := i, files
+		group.Go(func() error {
+			batchPhase := fmt.Sprintf("review-batch-%d", i+1)
+			emitAITrace(withAIPhase(groupCtx, batchPhase), string(llm.RoleReviewer), "workflow",
+				fmt.Sprintf("Exploring batch %d/%d: %s", i+1, len(batches), strings.Join(files, ", ")))
+			prompt := fmt.Sprintf("Repository reconnaissance summary:\n%s\n\nInvestigate batch %d/%d. The assigned files are:\n- %s\n\nUse read_code to inspect the assigned files and search_code to follow inputs, callers, routes, authorization checks, state changes, and sinks across the repository. Use registered Semgrep rules only when useful. Examine external input, trust boundaries, authentication/authorization, races, serialization, file/network/process sinks, and business logic; do not limit yourself to literal patterns. Before tool calls, emit a concise public progress note describing the next check and why. After investigation, return only one JSON object with analysis_summary (a public evidence-based summary, not hidden chain-of-thought) and candidates (array). Candidate fields: file, line, symbol, type, suspected_vuln_class, cwe, impact, evidence, chain, rationale, priority_hint. Suggested general types: [%s]. Exact proof-pack types when applicable: %v. Every candidate needs a real file:line and a complete input-to-impact chain; omit best-practice-only concerns. Return candidates: [] when none are supported.", reconSummary, i+1, len(batches), strings.Join(files, "\n- "), taxonomy, sinkTypes)
+			batchReg := &agent.ToolRegistry{SnapshotDir: snapshotDir, Rules: registry.Rules, SemgrepBin: registry.SemgrepBin}
+			batchReg.SetAudit(audit)
+			text, toolCalls, callErr := reviewerAgentSession(withAIPhase(groupCtx, batchPhase), reviewer, reviewerModel, batchReg, toolDefs, prompt)
+			if callErr != nil {
+				return fmt.Errorf("reviewer batch %d failed: %w", i+1, callErr)
+			}
+			batch, err := decodeReviewCandidates(text)
+			if err != nil {
+				return fmt.Errorf("reviewer batch %d response is not normalizable structured JSON: %w", i+1, err)
+			}
+			batchResults[i] = batch
+			emitAITrace(withAIPhase(groupCtx, batchPhase), string(llm.RoleReviewer), "workflow",
+				fmt.Sprintf("Batch %d/%d complete: %d tool call(s), %d candidate(s)", i+1, len(batches), toolCalls, len(batch)))
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	for _, batch := range batchResults {
 		raw = append(raw, batch...)
-		emitAITrace(withAIPhase(ctx, batchPhase), string(llm.RoleReviewer), "workflow",
-			fmt.Sprintf("Batch %d/%d complete: %d tool call(s), %d candidate(s)", i+1, len(batches), toolCalls, len(batch)))
 	}
 	// Map/reduce 的第二階段讓 reviewer 看見所有批次候選，補上跨檔資料流、
 	// 去除重複與只看單檔時無法辨識的信任邊界。仍要求結果錨定現有行號。

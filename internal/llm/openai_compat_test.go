@@ -354,6 +354,8 @@ func TestOpenAICompatEmptyResponseRefusal(t *testing.T) {
 // TestOpenAICompatHTTPErrorClassification 驗證 §18.3 錯誤分類：非 2xx 一律
 // *Error{StatusCode, Body}，只看 HTTP 狀態碼。
 func TestOpenAICompatHTTPErrorClassification(t *testing.T) {
+	restore := setOpenAIRetryDelayForTest(t, 0)
+	defer restore()
 	for _, status := range []int{400, 401, 429, 500, 503} {
 		// Transient statuses are retried; keep returning the same error so this
 		// test verifies exhaustion rather than accidental recovery.
@@ -377,6 +379,8 @@ func TestOpenAICompatHTTPErrorClassification(t *testing.T) {
 }
 
 func TestOpenAICompatRetriesTransientTransportError(t *testing.T) {
+	restore := setOpenAIRetryDelayForTest(t, 0)
+	defer restore()
 	calls := 0
 	a := NewOpenAICompat("openrouter", "https://openrouter.ai/api/v1", "test-key", "test-model")
 	a.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -513,10 +517,15 @@ func TestOpenAICompatEffortNotDowngradedOnOther400(t *testing.T) {
 
 // TestOpenAICompatContextCancel 驗證 context 取消會中止 HTTP 請求。
 func TestOpenAICompatContextCancel(t *testing.T) {
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(5 * time.Second)
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"choices":[]}`)
+		select {
+		case <-r.Context().Done():
+			return
+		case <-release:
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, `{"choices":[]}`)
+		}
 	}))
 	t.Cleanup(srv.Close)
 	a := newCompat(t, srv)
@@ -525,6 +534,8 @@ func TestOpenAICompatContextCancel(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	_, err := a.Chat(ctx, ChatRequest{Model: "m"})
+	close(release)
+	srv.CloseClientConnections()
 	if err == nil {
 		t.Fatal("context 取消應回錯誤")
 	}
@@ -534,6 +545,11 @@ func TestOpenAICompatContextCancel(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("Chat 未被 context 中止，耗時 %v", elapsed)
 	}
-	// client 端已中止；主動斷線讓 server handler 不必睡完（否則 srv.Close 等待 5s）。
-	srv.CloseClientConnections()
+}
+
+func setOpenAIRetryDelayForTest(t *testing.T, delay time.Duration) func() {
+	t.Helper()
+	old := openAIRetryDelay
+	openAIRetryDelay = func(int) time.Duration { return delay }
+	return func() { openAIRetryDelay = old }
 }

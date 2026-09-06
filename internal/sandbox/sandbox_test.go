@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,11 +20,48 @@ import (
 // requireDocker 探測 docker daemon；不可用時 skip 全部整合測試。
 func requireDocker(t *testing.T) *Runner {
 	t.Helper()
-	r := &Runner{}
-	if err := r.Available(); err != nil {
-		t.Skipf("docker 不可用，跳過整合測試：%v", err)
+	sandboxDockerOnce.Do(func() {
+		sandboxDockerErr = (&Runner{}).Available()
+	})
+	if sandboxDockerErr != nil {
+		t.Skipf("docker 不可用，跳過整合測試：%v", sandboxDockerErr)
 	}
-	return r
+	return &Runner{}
+}
+
+var (
+	sandboxDockerOnce sync.Once
+	sandboxDockerErr  error
+	busyboxOnce       sync.Once
+	busyboxRef        string
+	busyboxErr        error
+)
+
+func lookupBusyboxDigestRef(r *Runner) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	out, _, err := r.run(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", "busybox")
+	if err != nil {
+		if _, _, pullErr := r.run(ctx, "pull", "-q", "busybox"); pullErr != nil {
+			return "", pullErr
+		}
+		out, _, err = r.run(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", "busybox")
+		if err != nil {
+			return "", err
+		}
+	}
+	var digests []string
+	if err := json.Unmarshal(out, &digests); err != nil {
+		return "", err
+	}
+	if len(digests) == 0 {
+		return "", errors.New("busybox has no RepoDigests")
+	}
+	ref := digests[0]
+	if !strings.Contains(ref, "@sha256:") {
+		return "", fmt.Errorf("RepoDigest is not digest form: %q", ref)
+	}
+	return ref, nil
 }
 
 func TestEnvironmentCheckIsReadOnlyAndNetworkless(t *testing.T) {
@@ -66,28 +105,13 @@ func TestCreateRejectsUnknownDigest(t *testing.T) {
 // pull（§22：以 digest 記錄）。取不到 RepoDigest（如本機構建映像）即 skip。
 func busyboxDigestRef(t *testing.T, r *Runner) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	out, _, err := r.run(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", "busybox")
-	if err != nil {
-		// 映像不存在 → pull；pull 也失敗（無網路等）即 skip。
-		if _, _, pullErr := r.run(ctx, "pull", "-q", "busybox"); pullErr != nil {
-			t.Skipf("docker pull busybox 失敗，跳過整合測試：%v", pullErr)
-		}
-		out, _, err = r.run(ctx, "image", "inspect", "--format", "{{json .RepoDigests}}", "busybox")
-		if err != nil {
-			t.Skipf("docker image inspect busybox 失敗，跳過整合測試：%v", err)
-		}
+	busyboxOnce.Do(func() {
+		busyboxRef, busyboxErr = lookupBusyboxDigestRef(r)
+	})
+	if busyboxErr != nil {
+		t.Skipf("busybox digest unavailable, skipping integration test: %v", busyboxErr)
 	}
-	var digests []string
-	if jErr := json.Unmarshal(out, &digests); jErr != nil || len(digests) == 0 {
-		t.Skipf("busybox 無 RepoDigest（本機構建映像？），跳過整合測試：%v", jErr)
-	}
-	ref := digests[0] // 形如 "busybox@sha256:…"
-	if !strings.Contains(ref, "@sha256:") {
-		t.Skipf("RepoDigest 非 digest 形式：%q", ref)
-	}
-	return ref
+	return busyboxRef
 }
 
 // ---- docker inspect 驗證結構（欄位取自 docker 的 container inspect JSON） ----

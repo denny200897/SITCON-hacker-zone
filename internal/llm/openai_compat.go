@@ -43,6 +43,10 @@ const openAIErrBodyMax = 4096
 // 取 300s 為上界；context 取消仍可更早中止（見 Chat）。
 const openAITimeout = 300 * time.Second
 
+var openAIRetryDelay = func(attempt int) time.Duration {
+	return time.Duration(250*(attempt+1)) * time.Millisecond
+}
+
 // OpenAICompatAdapter 實作 Adapter（§3.2）。
 type OpenAICompatAdapter struct {
 	// provider 是使用者自訂供應商名（全域引用語法 <provider>/<model-id> 的
@@ -404,7 +408,16 @@ func transientOpenAITransportError(ctx context.Context, err error) bool {
 }
 
 func waitOpenAIRetry(ctx context.Context, attempt int) error {
-	t := time.NewTimer(time.Duration(250*(attempt+1)) * time.Millisecond)
+	delay := openAIRetryDelay(attempt)
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
+	}
+	t := time.NewTimer(delay)
 	defer t.Stop()
 	select {
 	case <-ctx.Done():

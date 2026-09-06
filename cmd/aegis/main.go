@@ -13,12 +13,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	aegisassets "github.com/aegis-dev/aegis"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/aegis-dev/aegis/internal/agent"
 	"github.com/aegis-dev/aegis/internal/approval"
 	"github.com/aegis-dev/aegis/internal/candidates"
@@ -473,18 +476,17 @@ func newStage(name, short string) *cobra.Command {
 					coverage.DetectorNotes = append(coverage.DetectorNotes, "semgrep unavailable; LLM fallback used")
 					fmt.Fprintln(cmd.OutOrStdout(), "warning: semgrep not found; continuing with LLM global review")
 				} else {
-					for _, det := range pack.Manifest.Detectors {
-						group, runErr := candidates.Run(cmd.Context(), snap.Dir, filepath.Join(packDir, det.Path), det.ID, "semgrep")
-						if runErr != nil {
+					for _, result := range runDetectors(cmd.Context(), snap.Dir, packDir, pack.Manifest.Detectors, "semgrep") {
+						if result.err != nil {
 							if !reviewerConfigured {
-								return stageError(name, runErr)
+								return stageError(name, result.err)
 							}
-							coverage.DetectorNotes = append(coverage.DetectorNotes, det.ID+": execution failed; LLM fallback used")
-							fmt.Fprintf(cmd.OutOrStdout(), "warning: detector %s failed; LLM global review continues\n", det.ID)
+							coverage.DetectorNotes = append(coverage.DetectorNotes, result.id+": execution failed; LLM fallback used")
+							fmt.Fprintf(cmd.OutOrStdout(), "warning: detector %s failed; LLM global review continues\n", result.id)
 							continue
 						}
-						coverage.ExecutedDetectorIDs = append(coverage.ExecutedDetectorIDs, det.ID)
-						detectorResults = append(detectorResults, group)
+						coverage.ExecutedDetectorIDs = append(coverage.ExecutedDetectorIDs, result.id)
+						detectorResults = append(detectorResults, result.candidates)
 					}
 				}
 			}
@@ -525,19 +527,36 @@ func newStage(name, short string) *cobra.Command {
 			}
 			findings := make([]reporting.Finding, 0, len(cs))
 			triages := make([]triage.Result, 0, len(cs))
-			for _, c := range cs {
+			// Per-candidate LLM triage is the slow part; run those in parallel up front.
+			llmComments := make([]string, len(cs))
+			if roleConfigured(root, settings.RoleTriager) {
+				tg, tctx := errgroup.WithContext(scanCtx)
+				tg.SetLimit(concurrencyLimit(4))
+				for i, c := range cs {
+					i, c := i, c
+					tg.Go(func() error {
+						t := triage.EvaluateAt(c, inv, snap.Dir)
+						comment, triageErr := runLLMTriage(tctx, root, c, t)
+						if triageErr != nil {
+							return fmt.Errorf("triager failed: %w", triageErr)
+						}
+						llmComments[i] = strings.TrimSpace(comment)
+						fmt.Fprintf(cmd.OutOrStdout(), "LLM triager review complete: %s\n", c.ID)
+						return nil
+					})
+				}
+				if err := tg.Wait(); err != nil {
+					return stageError(name, err)
+				}
+			}
+			for i, c := range cs {
 				fid, err := j.NextID("F")
 				if err != nil {
 					return stageError(name, err)
 				}
 				t := triage.EvaluateAt(c, inv, snap.Dir)
-				if roleConfigured(root, settings.RoleTriager) {
-					comment, triageErr := runLLMTriage(scanCtx, root, c, t)
-					if triageErr != nil {
-						return stageError(name, fmt.Errorf("triager failed: %w", triageErr))
-					}
-					t.Rationale += "；LLM triager：" + strings.TrimSpace(comment)
-					fmt.Fprintf(cmd.OutOrStdout(), "LLM triager review complete: %s\n", c.ID)
+				if llmComments[i] != "" {
+					t.Rationale += "；LLM triager：" + llmComments[i]
 				}
 				triages = append(triages, t)
 				sources := make([]any, 0, len(c.Sources))
@@ -733,6 +752,43 @@ func newStage(name, short string) *cobra.Command {
 		return stageError(name, fmt.Errorf("%s pipeline not wired (produce scan run artifacts first)", name))
 	}
 	return c
+}
+
+type detectorRunResult struct {
+	id         string
+	candidates []candidates.Candidate
+	err        error
+}
+
+func runDetectors(ctx context.Context, snapshotDir, packDir string, detectors []packs.DetectorEntry, bin string) []detectorRunResult {
+	if len(detectors) == 0 {
+		return nil
+	}
+	const maxDetectorWorkers = 4
+	results := make([]detectorRunResult, len(detectors))
+	workers := maxDetectorWorkers
+	if len(detectors) < workers {
+		workers = len(detectors)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				det := detectors[idx]
+				group, err := candidates.Run(ctx, snapshotDir, filepath.Join(packDir, det.Path), det.ID, bin)
+				results[idx] = detectorRunResult{id: det.ID, candidates: group, err: err}
+			}
+		}()
+	}
+	for idx := range detectors {
+		jobs <- idx
+	}
+	close(jobs)
+	wg.Wait()
+	return results
 }
 
 type proveOptions struct {

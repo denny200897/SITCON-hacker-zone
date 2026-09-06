@@ -6,7 +6,8 @@
 //
 // 回饋協定（§18.2）：run 結束後以 user 訊息內 <operator>…</operator> 送出
 // 結構化 run_outcome（固定欄位、tails 有界、nonce 紅線後不出現）；模型下一輪
-// 提交新 spec 前必須先輸出三行 preamble（學到／改／預期），閘驗不到即拒收。
+// 提交新 spec 前會要求模型輸出三行 preamble（學到／改／預期），作為可觀測
+// 修正紀錄；閘只拒收會影響安全/正確性的 schema、nonce、duplicate 問題。
 //
 // v1 序列、無 goroutine（§23-1）。
 package orchestrator
@@ -120,7 +121,7 @@ func (ap *AgentProver) Run(ctx context.Context) (*AgentProveResult, error) {
 
 	counters := ap.Budget.NewCounters()
 	seenHashes := map[string]bool{} // 同款重試不計也不收（§9.3）
-	feedbackSeen := false           // 曾送出 operator 回饋 → 之後提交需三行 preamble
+	feedbackSeen := false           // 曾送出 operator 回饋 → prompt 會要求三行 preamble
 	freshEyesUsed := false
 	freshRound := false // fresh-eyes 進行中：任何非 PROVEN 結果即進終態、不扣預算
 	var pendingTerminal *budget.Stop
@@ -461,7 +462,7 @@ type gateErr struct {
 	reason   string // journal witness_spec_rejected 的 reason
 }
 
-// checkSpec 順序：schema → §17.2 placeholder → duplicate hash → preamble。
+// checkSpec 順序：schema → §17.2 placeholder → duplicate hash。
 func (ap *AgentProver) checkSpec(spec map[string]any, assistantText string,
 	feedbackSeen bool, seenHashes map[string]bool) *gateErr {
 	if ap.ValidateSpec != nil {
@@ -476,9 +477,6 @@ func (ap *AgentProver) checkSpec(spec map[string]any, assistantText string,
 	hash := specHash(spec)
 	if seenHashes[hash] {
 		return &gateErr{"duplicate_spec: 同內容 spec 已提交過（同款重試不計也不收，§9.3）", "duplicate_spec"}
-	}
-	if feedbackSeen && countPreambleLines(assistantText) < 3 {
-		return &gateErr{"missing_preamble: 提交新 spec 前必須先輸出三行（學到：／改：／預期：，§18.2）", "missing_preamble"}
 	}
 	return nil
 }
@@ -553,9 +551,9 @@ func (ap *AgentProver) operatorRunOutcome(res *ProveResult, counters budget.Coun
 		"hints": ap.hints(res),
 	}
 	out, _ := json.MarshalIndent(doc, "", "  ")
-	// 三行 preamble 規則提醒（閘會驗）。
+	// 三行 preamble 規則提醒；缺少時不中止有效 spec，避免格式問題阻塞 PoC。
 	return "<operator>\n" + string(out) + "\n</operator>\n" +
-		"（提交新 WitnessSpec 前，必須先輸出三行：學到：／改：／預期：。payload 繼續以 {{NONCE}} 撰寫。）\n"
+		"（提交新 WitnessSpec 前，請先輸出三行：學到：／改：／預期：。payload 繼續以 {{NONCE}} 撰寫。）\n"
 }
 
 // operatorError 是非 run 失敗（transport／prove 例外／未提交）的回饋；格式同 §18.2。

@@ -317,16 +317,16 @@ func TestAgentProverOscillationDifferentSig(t *testing.T) {
 
 // ---- §22 M0c：拒絕路徑 ----
 
-// TestAgentProverGateRejections：duplicate_spec／missing_preamble／missing_nonce。
+// TestAgentProverGateRejections：duplicate_spec／missing_nonce。
 func TestAgentProverGateRejections(t *testing.T) {
 	pre := "學到：x\n改：y\n預期：z"
-	// round1: 提交（成功）→ miss；round2: 同 hash 重送（拒）→ 改帶 preamble 重送不同 payload → miss；round3: 缺 preamble → 拒 → 正確重送 → miss
+	// round1: 提交（成功）→ miss；round2: 同 hash 重送（拒）→ 改帶 preamble 重送不同 payload → miss；round3: 缺 {{NONCE}} → 拒 → 有效 spec 即使缺 preamble 也會執行。
 	ad := &scriptAdapter{script: []llm.Response{
 		submitResp("s1", "{{NONCE}}'", ""),
 		// 同 hash 重送 → duplicate_spec；再正確提交
 		submitResp("s2", "{{NONCE}}'", ""), submitResp("s3", "{{NONCE}}'-a", pre),
-		// 缺 {{NONCE}} → missing_nonce_placeholder；缺 preamble → missing_preamble；再正確提交
-		submitResp("s4", "no-placeholder", pre), submitResp("s5", "{{NONCE}}'-b", ""), submitResp("s6", "{{NONCE}}'-c", pre),
+		// 缺 {{NONCE}} → missing_nonce_placeholder；缺 preamble 但 spec 有效 → 接受並執行。
+		submitResp("s4", "no-placeholder", pre), submitResp("s5", "{{NONCE}}'-b", ""),
 		endResp("無後續假設"), // 第一次明示觸發獨立確認
 		endResp("無後續假設"), // 唯一一行再次確認後才收斂
 	}}
@@ -343,7 +343,7 @@ func TestAgentProverGateRejections(t *testing.T) {
 	if res.Verification != domain.VerificationHypothesisRej {
 		t.Fatalf("明示無後續假設應 HYPOTHESIS_REJECTED，得 %s", res.Verification)
 	}
-	// journal 應有三次 witness_spec_rejected：duplicate_spec、missing_nonce_placeholder、missing_preamble。
+	// journal 應有兩次 witness_spec_rejected：duplicate_spec、missing_nonce_placeholder。
 	reasons := map[string]bool{}
 	for _, e := range journalEvents(t, j) {
 		if e.Type == "witness_spec_rejected" {
@@ -352,10 +352,13 @@ func TestAgentProverGateRejections(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"duplicate_spec", "missing_nonce_placeholder", "missing_preamble"} {
+	for _, want := range []string{"duplicate_spec", "missing_nonce_placeholder"} {
 		if !reasons[want] {
 			t.Fatalf("journal 缺 %s 拒收事件：%#v", want, reasons)
 		}
+	}
+	if reasons["missing_preamble"] {
+		t.Fatalf("缺 preamble 不應再拒收有效 spec：%#v", reasons)
 	}
 }
 

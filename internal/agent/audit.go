@@ -21,12 +21,14 @@ import (
 // ---- 角色工具白名單（§18.1 閉集） ----
 
 // Whitelist 依角色閉集：recon/reviewer/triager 三個讀取工具；prover 加
-// submit_witness_spec；reporter 只有 read_code。所有角色都沒有 shell／寫檔工具。
+// submit_witness_spec 與 submit_environment_spec；reporter 只有 read_code。
+// 所有角色都沒有 shell／寫檔工具。submit_environment_spec 是 agent 自建驗證
+// 環境的提交工具，其副作用（build/run）由閘 (b) 的核可與 sandbox 邊界把關。
 var Whitelist = map[llm.Role][]string{
 	llm.RoleRecon:    {"read_code", "search_code", "semgrep"},
 	llm.RoleReviewer: {"read_code", "search_code", "semgrep"},
 	llm.RoleTriager:  {"read_code", "search_code", "semgrep"},
-	llm.RoleProver:   {"read_code", "search_code", "semgrep", "submit_witness_spec"},
+	llm.RoleProver:   {"read_code", "search_code", "semgrep", "submit_witness_spec", "submit_environment_spec"},
 	llm.RoleReporter: {"read_code"},
 }
 

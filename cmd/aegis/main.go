@@ -190,6 +190,23 @@ func newReview() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "○ [3/5] PROVE skipped — %d finding(s), but no matching trusted oracle\n", len(findings))
 			fmt.Fprintln(cmd.OutOrStdout(), "○ [4/5] REPLAY skipped — no evidence bundle")
 		}
+		// Agent-built environment: for findings the pinned oracle flow could not
+		// prove, let the prover author a Docker build+exploit recipe (operator
+		// approves) and require a trusted nonce oracle to confirm.
+		if latest, rerr := os.ReadFile(filepath.Join(runDir, "findings.json")); rerr == nil {
+			var fresh []reporting.Finding
+			if decodeJSON(latest, &fresh) == nil && len(fresh) > 0 {
+				approver := commandBuildApprover(cmd, approveBuild)
+				envCtx := approval.WithApprover(cmd.Context(), approver)
+				if proven, aerr := runAgentEnvProve(envCtx, cmd.OutOrStdout(), runDir, scanRoot, fresh, watch); aerr != nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "○ agent-built proof error — %v\n", aerr)
+				} else if proven > 0 {
+					if wErr := writeFindings(runDir, fresh); wErr != nil {
+						fmt.Fprintf(cmd.OutOrStdout(), "○ could not persist agent-built proofs — %v\n", wErr)
+					}
+				}
+			}
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), "\n[5/5] REPORT — generating final security report")
 		reportArgs := []string{"report", "--target", scanRoot, "--run-dir", runDir}
 		if watch {

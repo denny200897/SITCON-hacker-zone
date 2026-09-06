@@ -41,6 +41,10 @@ type ToolRegistry struct {
 	SemgrepBin string
 	// OnSubmit 是 submit_witness_spec 閘（prover 專用；nil 時任何提交都拒絕）。
 	OnSubmit SubmitHandler
+	// OnSubmitEnv 是 submit_environment_spec 閘（agent 自建驗證環境專用；nil 時
+	// 任何提交都拒絕）。副作用（image build／sandbox run）在此 handler 內、於核可
+	// 後才發生。
+	OnSubmitEnv SubmitHandler
 	// audit 記錄器；nil 時不記（僅測試）。
 	audit        *AuditLog
 	acceptedSpec bool
@@ -103,6 +107,18 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 		}
 		return Result{Content: "policy_denied: 本 session 已接受 WitnessSpec", IsError: true}
 	}
+	if tool == "submit_environment_spec" && t.OnSubmitEnv == nil {
+		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "no_env_submit_handler"); err != nil {
+			return auditFailure(err)
+		}
+		return Result{Content: "policy_denied: 本 session 未開放環境提交", IsError: true}
+	}
+	if tool == "submit_environment_spec" && t.acceptedSpec {
+		if err := t.audit.Append(role, tool, auditInput, AuditDenied, "spec_already_accepted"); err != nil {
+			return auditFailure(err)
+		}
+		return Result{Content: "policy_denied: 本 session 已接受一份 spec", IsError: true}
+	}
 	// The allow decision must be durable before any tool side effect or source
 	// disclosure occurs.
 	if err := t.audit.Append(role, tool, auditInput, AuditAllowed, "preflight"); err != nil {
@@ -122,6 +138,8 @@ func (t *ToolRegistry) Execute(ctx context.Context, role llm.Role, tool string, 
 		res = t.semgrep(ctx, input)
 	case "submit_witness_spec":
 		res = t.submit(ctx, role, input, assistantText)
+	case "submit_environment_spec":
+		res = t.submitEnv(ctx, input, assistantText)
 	default:
 		res = Result{Content: "policy_denied: 未知工具", IsError: true}
 	}
@@ -395,6 +413,26 @@ func (t *ToolRegistry) submit(ctx context.Context, _ llm.Role, input json.RawMes
 		return Result{Content: "policy_denied: WitnessSpec 非 JSON object：" + err.Error(), IsError: true}
 	}
 	accepted, feedback := t.OnSubmit(ctx, spec, assistantText)
+	if !accepted {
+		return Result{Content: "spec_rejected: " + feedback, IsError: true}
+	}
+	if feedback == "accepted" {
+		t.acceptedSpec = true
+	}
+	return Result{Content: feedback}
+}
+
+// submitEnv is the gate-(b) handler for submit_environment_spec: it hands the
+// agent-authored environment spec to OnSubmitEnv, which (after operator
+// approval) builds and exploits it in a sandbox and lets a trusted oracle
+// decide. A PROVEN outcome returns "accepted" and terminates the session; any
+// other outcome returns feedback so the agent can revise and resubmit.
+func (t *ToolRegistry) submitEnv(ctx context.Context, input json.RawMessage, assistantText string) Result {
+	var spec map[string]any
+	if err := json.Unmarshal(input, &spec); err != nil {
+		return Result{Content: "policy_denied: EnvironmentSpec 非 JSON object：" + err.Error(), IsError: true}
+	}
+	accepted, feedback := t.OnSubmitEnv(ctx, spec, assistantText)
 	if !accepted {
 		return Result{Content: "spec_rejected: " + feedback, IsError: true}
 	}

@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aegis.dev/schemas/environment_spec.schema.json",
+  "title": "EnvironmentSpec",
+  "description": "Agent-authored recipe to build a target in Docker, run it isolated, drive one exploit request, and let a nonce oracle confirm the vulnerability.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dockerfile", "app_port", "exploit", "oracle"],
+  "properties": {
+    "dockerfile": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 20000,
+      "description": "A complete Dockerfile that builds and (via CMD/ENTRYPOINT) starts the target app listening on app_port."
+    },
+    "app_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "TCP port the app listens on inside the container."
+    },
+    "ready_path": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "HTTP path polled to decide the app is up (default \"/\")."
+    },
+    "exploit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "enum": ["GET", "POST"] },
+        "path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "body": { "type": "string", "maxLength": 8192 }
+      },
+      "description": "The single request that triggers the vulnerability. Its path and/or body MUST contain the literal {{NONCE}} placeholder."
+    },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": ["reflected_nonce", "log_nonce"],
+          "description": "reflected_nonce: the nonce appears in the exploit response body. log_nonce: the nonce appears in the app's stdout/stderr logs."
+        }
+      }
+    },
+    "rationale": {
+      "type": "string",
+      "maxLength": 4096,
+      "description": "Why observing the nonce here proves the specific vulnerability."
+    }
+  }
+}
